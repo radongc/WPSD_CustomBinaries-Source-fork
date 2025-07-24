@@ -6,8 +6,8 @@ CXX     = c++
 #LIBS    = -lm -lpthread
 
 # Use the following CFLAGS and LIBS if you do want to use gpsd.
-CFLAGS  = -s -O3 -Wall -DHAVE_LOG_H -DUSE_GPSD -std=c++0x -pthread
-LIBS    = -lm -lpthread -lgps
+CFLAGS  = -s -O3 -Wall -DHAVE_LOG_H -std=c++0x -pthread
+LIBS    = -lm -lpthread
 
 LDFLAGS = -g
 

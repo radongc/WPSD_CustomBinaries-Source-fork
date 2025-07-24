@@ -23,7 +23,7 @@ endif
 
 RELEASEFLAGS   := -DNDEBUG -DwxDEBUG_LEVEL=0
 export CXX     := $(shell wx-config --cxx)
-export CFLAGS  := -s -O2 -Wall $(shell wx-config --cxxflags) -DLOG_DIR='"$(LOGDIR)"' -DCONF_DIR='"$(CONFDIR)"' -DDATA_DIR='"$(DATADIR)"' -DDEXTRA_LINK -DUSE_GPSD
+export CFLAGS  := -s -O2 -Wall $(shell wx-config --cxxflags) -DLOG_DIR='"$(LOGDIR)"' -DCONF_DIR='"$(CONFDIR)"' -DDATA_DIR='"$(DATADIR)"' -DDEXTRA_LINK
 #export CFLAGS  := -s -O2 -Wall $(shell wx-config --cxxflags) -DLOG_DIR='"$(LOGDIR)"' -DCONF_DIR='"$(CONFDIR)"' -DDATA_DIR='"$(DATADIR)"' -DDEXTRA_LINK
 export CFLAGS  := $(CFLAGS) $(RELEASEFLAGS)
 export LIBS    := $(shell wx-config --libs base,net)

@@ -34,28 +34,28 @@ export LDFLAGS :=
 all:	ircDDBGateway/ircddbgatewayd APRSTransmit/aprstransmitd RemoteControl/remotecontrold \
 	StarNetServer/starnetserverd TextTransmit/texttransmitd TimerControl/timercontrold TimeServer/timeserverd VoiceTransmit/voicetransmitd
 
-ircDDBGateway/ircddbgatewayd:	Common/Common.a ircDDB/IRCDDB.a force
+ircDDBGateway/ircddbgatewayd:	Common/Common.a ircDDB/IRCDDB.a
 	$(MAKE) -C ircDDBGateway
 
-APRSTransmit/aprstransmitd:	Common/Common.a force
+APRSTransmit/aprstransmitd:	Common/Common.a
 	$(MAKE) -C APRSTransmit
 
-RemoteControl/remotecontrold:	Common/Common.a force
+RemoteControl/remotecontrold:	Common/Common.a
 	$(MAKE) -C RemoteControl
 
-StarNetServer/starnetserverd:	Common/Common.a ircDDB/IRCDDB.a force
+StarNetServer/starnetserverd:	Common/Common.a ircDDB/IRCDDB.a
 	$(MAKE) -C StarNetServer
 
-TextTransmit/texttransmitd:	Common/Common.a force
+TextTransmit/texttransmitd:	Common/Common.a
 	$(MAKE) -C TextTransmit
 
-TimerControl/timercontrold:	Common/Common.a force
+TimerControl/timercontrold:	Common/Common.a
 	$(MAKE) -C TimerControl
 
-TimeServer/timeserverd:	Common/Common.a force
+TimeServer/timeserverd:	Common/Common.a
 	$(MAKE) -C TimeServer
 
-VoiceTransmit/voicetransmitd:	Common/Common.a force
+VoiceTransmit/voicetransmitd:	Common/Common.a
 	$(MAKE) -C VoiceTransmit
 
 Common/Common.a: force

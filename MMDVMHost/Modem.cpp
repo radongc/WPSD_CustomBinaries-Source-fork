@@ -400,7 +400,7 @@ void CModem::clock(unsigned int ms)
 
 	m_inactivityTimer.clock(ms);
 	if (m_inactivityTimer.hasExpired()) {
-		LogError("No reply from the modem for some time, resetting it");
+		LogDebug("No reply from the modem for some time, resetting it");
 		m_error = true;
 		close();
 
@@ -673,17 +673,17 @@ void CModem::clock(unsigned int ms)
 						m_tx = (m_buffer[m_offset + 2U] & 0x01U) == 0x01U;
 						bool adcOverflow = (m_buffer[m_offset + 2U] & 0x02U) == 0x02U;
 						if (adcOverflow)
-							LogError("MMDVM ADC levels have overflowed");
+							LogDebug("MMDVM ADC levels have overflowed");
 						bool rxOverflow = (m_buffer[m_offset + 2U] & 0x04U) == 0x04U;
 						if (rxOverflow)
-							LogError("MMDVM RX buffer has overflowed");
+							LogDebug("MMDVM RX buffer has overflowed");
 						bool txOverflow = (m_buffer[m_offset + 2U] & 0x08U) == 0x08U;
 						if (txOverflow)
-							LogError("MMDVM TX buffer has overflowed");
+							LogDebug("MMDVM TX buffer has overflowed");
 						m_lockout = (m_buffer[m_offset + 2U] & 0x10U) == 0x10U;
 						bool dacOverflow = (m_buffer[m_offset + 2U] & 0x20U) == 0x20U;
 						if (dacOverflow)
-							LogError("MMDVM DAC levels have overflowed");
+							LogDebug("MMDVM DAC levels have overflowed");
 						m_cd = (m_buffer[m_offset + 2U] & 0x40U) == 0x40U;
 
 						m_p25Space    = 0U;
@@ -712,17 +712,17 @@ void CModem::clock(unsigned int ms)
 						m_tx = (m_buffer[m_offset + 1U] & 0x01U) == 0x01U;
 						bool adcOverflow = (m_buffer[m_offset + 1U] & 0x02U) == 0x02U;
 						if (adcOverflow)
-							LogError("MMDVM ADC levels have overflowed");
+							LogDebug("MMDVM ADC levels have overflowed");
 						bool rxOverflow = (m_buffer[m_offset + 1U] & 0x04U) == 0x04U;
 						if (rxOverflow)
-							LogError("MMDVM RX buffer has overflowed");
+							LogDebug("MMDVM RX buffer has overflowed");
 						bool txOverflow = (m_buffer[m_offset + 1U] & 0x08U) == 0x08U;
 						if (txOverflow)
-							LogError("MMDVM TX buffer has overflowed");
+							LogDebug("MMDVM TX buffer has overflowed");
 						m_lockout = (m_buffer[m_offset + 1U] & 0x10U) == 0x10U;
 						bool dacOverflow = (m_buffer[m_offset + 1U] & 0x20U) == 0x20U;
 						if (dacOverflow)
-							LogError("MMDVM DAC levels have overflowed");
+							LogDebug("MMDVM DAC levels have overflowed");
 						m_cd = (m_buffer[m_offset + 1U] & 0x40U) == 0x40U;
 
 						m_dstarSpace  = m_buffer[m_offset + 3U];
@@ -1770,7 +1770,7 @@ bool CModem::readVersion()
 					return true;
 
 				default:
-					LogError("MMDVM protocol version: %u, unsupported by this version of the MMDVM Host", m_protocolVersion);
+					LogDebug("MMDVM protocol version: %u, unsupported by this version of the MMDVM Host", m_protocolVersion);
 					return false;
 				}
 
@@ -1781,7 +1781,7 @@ bool CModem::readVersion()
 		CThread::sleep(1500U);
 	}
 
-	LogError("Unable to read the firmware version after six attempts");
+	LogDebug("Unable to read the firmware version after six attempts");
 
 	return false;
 }
@@ -1908,7 +1908,7 @@ bool CModem::setConfig1()
 		if ((resp == RESP_TYPE_MMDVM::OK) && (m_buffer[2U] != MMDVM_ACK) && (m_buffer[2U] != MMDVM_NAK)) {
 			count++;
 			if (count >= MAX_RESPONSES) {
-				LogError("The MMDVM is not responding to the SET_CONFIG command");
+				LogDebug("The MMDVM is not responding to the SET_CONFIG command");
 				return false;
 			}
 		}
@@ -1917,7 +1917,7 @@ bool CModem::setConfig1()
 	// CUtils::dump(1U, "Response", m_buffer, m_length);
 
 	if ((resp == RESP_TYPE_MMDVM::OK) && (m_buffer[2U] == MMDVM_NAK)) {
-		LogError("Received a NAK to the SET_CONFIG command from the modem");
+		LogDebug("Received a NAK to the SET_CONFIG command from the modem");
 		return false;
 	}
 
@@ -2030,7 +2030,7 @@ bool CModem::setConfig2()
 		if ((resp == RESP_TYPE_MMDVM::OK) && (m_buffer[2U] != MMDVM_ACK) && (m_buffer[2U] != MMDVM_NAK)) {
 			count++;
 			if (count >= MAX_RESPONSES) {
-				LogError("The MMDVM is not responding to the SET_CONFIG command");
+				LogDebug("The MMDVM is not responding to the SET_CONFIG command");
 				return false;
 			}
 		}
@@ -2039,7 +2039,7 @@ bool CModem::setConfig2()
 	// CUtils::dump(1U, "Response", m_buffer, m_length);
 
 	if ((resp == RESP_TYPE_MMDVM::OK) && (m_buffer[2U] == MMDVM_NAK)) {
-		LogError("Received a NAK to the SET_CONFIG command from the modem");
+		LogDebug("Received a NAK to the SET_CONFIG command from the modem");
 		return false;
 	}
 
@@ -2105,7 +2105,7 @@ bool CModem::setFrequency()
 		if ((resp == RESP_TYPE_MMDVM::OK) && (m_buffer[2U] != MMDVM_ACK) && (m_buffer[2U] != MMDVM_NAK)) {
 			count++;
 			if (count >= MAX_RESPONSES) {
-				LogError("The MMDVM is not responding to the SET_FREQ command");
+				LogDebug("The MMDVM is not responding to the SET_FREQ command");
 				return false;
 			}
 		}
@@ -2114,7 +2114,7 @@ bool CModem::setFrequency()
 	// CUtils::dump(1U, "Response", m_buffer, m_length);
 
 	if ((resp == RESP_TYPE_MMDVM::OK) && (m_buffer[2U] == MMDVM_NAK)) {
-		LogError("Received a NAK to the SET_FREQ command from the modem");
+		LogDebug("Received a NAK to the SET_FREQ command from the modem");
 		return false;
 	}
 
@@ -2129,7 +2129,7 @@ RESP_TYPE_MMDVM CModem::getResponse()
 		// Get the start of the frame or nothing at all
 		int ret = m_port->read(m_buffer + 0U, 1U);
 		if (ret < 0) {
-			LogError("Error when reading from the modem");
+			LogDebug("Error when reading from the modem");
 			return RESP_TYPE_MMDVM::ERR;
 		}
 
@@ -2147,7 +2147,7 @@ RESP_TYPE_MMDVM CModem::getResponse()
 		// Get the length of the frame, 1/2
 		int ret = m_port->read(m_buffer + 1U, 1U);
 		if (ret < 0) {
-			LogError("Error when reading from the modem");
+			LogDebug("Error when reading from the modem");
 			m_state = SERIAL_STATE::START;
 			return RESP_TYPE_MMDVM::ERR;
 		}
@@ -2168,7 +2168,7 @@ RESP_TYPE_MMDVM CModem::getResponse()
 		// Get the length of the frane, 2/2
 		int ret = m_port->read(m_buffer + 2U, 1U);
 		if (ret < 0) {
-			LogError("Error when reading from the modem");
+			LogDebug("Error when reading from the modem");
 			m_state = SERIAL_STATE::START;
 			return RESP_TYPE_MMDVM::ERR;
 		}
@@ -2185,7 +2185,7 @@ RESP_TYPE_MMDVM CModem::getResponse()
 		// Get the frame type
 		int ret = m_port->read(&m_type, 1U);
 		if (ret < 0) {
-			LogError("Error when reading from the modem");
+			LogDebug("Error when reading from the modem");
 			m_state = SERIAL_STATE::START;
 			return RESP_TYPE_MMDVM::ERR;
 		}
@@ -2202,7 +2202,7 @@ RESP_TYPE_MMDVM CModem::getResponse()
 		while (m_offset < m_length) {
 			int ret = m_port->read(m_buffer + m_offset, m_length - m_offset);
 			if (ret < 0) {
-				LogError("Error when reading from the modem");
+				LogDebug("Error when reading from the modem");
 				m_state = SERIAL_STATE::START;
 				return RESP_TYPE_MMDVM::ERR;
 			}
@@ -2440,7 +2440,7 @@ bool CModem::setFMCallsignParams()
 		if ((resp == RESP_TYPE_MMDVM::OK) && (m_buffer[2U] != MMDVM_ACK) && (m_buffer[2U] != MMDVM_NAK)) {
 			count++;
 			if (count >= MAX_RESPONSES) {
-				LogError("The MMDVM is not responding to the SET_FM_PARAMS1 command");
+				LogDebug("The MMDVM is not responding to the SET_FM_PARAMS1 command");
 				return false;
 			}
 		}
@@ -2449,7 +2449,7 @@ bool CModem::setFMCallsignParams()
 	// CUtils::dump(1U, "Response", m_buffer, m_length);
 
 	if ((resp == RESP_TYPE_MMDVM::OK) && (m_buffer[2U] == MMDVM_NAK)) {
-		LogError("Received a NAK to the SET_FM_PARAMS1 command from the modem");
+		LogDebug("Received a NAK to the SET_FM_PARAMS1 command from the modem");
 		return false;
 	}
 
@@ -2492,7 +2492,7 @@ bool CModem::setFMAckParams()
 		if ((resp == RESP_TYPE_MMDVM::OK) && (m_buffer[2U] != MMDVM_ACK) && (m_buffer[2U] != MMDVM_NAK)) {
 			count++;
 			if (count >= MAX_RESPONSES) {
-				LogError("The MMDVM is not responding to the SET_FM_PARAMS2 command");
+				LogDebug("The MMDVM is not responding to the SET_FM_PARAMS2 command");
 				return false;
 			}
 		}
@@ -2501,7 +2501,7 @@ bool CModem::setFMAckParams()
 	// CUtils::dump(1U, "Response", m_buffer, m_length);
 
 	if ((resp == RESP_TYPE_MMDVM::OK) && (m_buffer[2U] == MMDVM_NAK)) {
-		LogError("Received a NAK to the SET_FM_PARAMS2 command from the modem");
+		LogDebug("Received a NAK to the SET_FM_PARAMS2 command from the modem");
 		return false;
 	}
 
@@ -2561,7 +2561,7 @@ bool CModem::setFMMiscParams()
 		if ((resp == RESP_TYPE_MMDVM::OK) && (m_buffer[2U] != MMDVM_ACK) && (m_buffer[2U] != MMDVM_NAK)) {
 			count++;
 			if (count >= MAX_RESPONSES) {
-				LogError("The MMDVM is not responding to the SET_FM_PARAMS3 command");
+				LogDebug("The MMDVM is not responding to the SET_FM_PARAMS3 command");
 				return false;
 			}
 		}
@@ -2570,7 +2570,7 @@ bool CModem::setFMMiscParams()
 	// CUtils::dump(1U, "Response", m_buffer, m_length);
 
 	if ((resp == RESP_TYPE_MMDVM::OK) && (m_buffer[2U] == MMDVM_NAK)) {
-		LogError("Received a NAK to the SET_FM_PARAMS3 command from the modem");
+		LogDebug("Received a NAK to the SET_FM_PARAMS3 command from the modem");
 		return false;
 	}
 
@@ -2612,7 +2612,7 @@ bool CModem::setFMExtParams()
 		if ((resp == RESP_TYPE_MMDVM::OK) && (m_buffer[2U] != MMDVM_ACK) && (m_buffer[2U] != MMDVM_NAK)) {
 			count++;
 			if (count >= MAX_RESPONSES) {
-				LogError("The MMDVM is not responding to the SET_FM_PARAMS4 command");
+				LogDebug("The MMDVM is not responding to the SET_FM_PARAMS4 command");
 				return false;
 			}
 		}
@@ -2621,7 +2621,7 @@ bool CModem::setFMExtParams()
 	// CUtils::dump(1U, "Response", m_buffer, m_length);
 
 	if ((resp == RESP_TYPE_MMDVM::OK) && (m_buffer[2U] == MMDVM_NAK)) {
-		LogError("Received a NAK to the SET_FM_PARAMS4 command from the modem");
+		LogDebug("Received a NAK to the SET_FM_PARAMS4 command from the modem");
 		return false;
 	}
 

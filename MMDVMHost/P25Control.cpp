@@ -788,7 +788,7 @@ void CP25Control::writeQueueRF(const unsigned char* data, unsigned int length)
 
 	unsigned int space = m_queue.freeSpace();
 	if (space < (length + 1U)) {
-		LogError("P25, overflow in the P25 RF queue");
+		LogDebug("P25, overflow in the P25 RF queue");
 		return;
 	}
 
@@ -807,7 +807,7 @@ void CP25Control::writeQueueNet(const unsigned char* data, unsigned int length)
 
 	unsigned int space = m_queue.freeSpace();
 	if (space < (length + 1U)) {
-		LogError("P25, overflow in the P25 RF queue");
+		LogDebug("P25, overflow in the P25 RF queue");
 		return;
 	}
 

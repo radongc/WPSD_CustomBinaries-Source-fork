@@ -57,7 +57,7 @@ CDMRLC* CDMRFullLC::decode(const unsigned char* data, unsigned char type)
 			break;
 
 		default:
-			::LogError("Unsupported LC type - %d", int(type));
+			::LogDebug("Unsupported LC type - %d", int(type));
 			return nullptr;
 	}
 
@@ -91,7 +91,7 @@ void CDMRFullLC::encode(const CDMRLC& lc, unsigned char* data, unsigned char typ
 			break;
 
 		default:
-			::LogError("Unsupported LC type - %d", int(type));
+			::LogDebug("Unsupported LC type - %d", int(type));
 			return;
 	}
 

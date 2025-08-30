@@ -392,7 +392,7 @@ int CMMDVMHost::run()
 		LogInfo("    Send Frame Type: %u", sendFrameType);
 
 		if (CUDPSocket::lookup(remoteAddress, remotePort, transparentAddress, transparentAddrLen) != 0) {
-			LogError("Unable to resolve the address of the Transparent Data source");
+			LogDebug("Unable to resolve the address of the Transparent Data source");
 			return 1;
 		}
 
@@ -1786,7 +1786,7 @@ void CMMDVMHost::enableModemMode(bool& mode, bool enabled)
 
 	m_modem->setModeParams(m_dstarEnabled, m_dmrEnabled, m_ysfEnabled, m_p25Enabled, m_nxdnEnabled, m_pocsagEnabled, m_fmEnabled);
 	if (!m_modem->writeConfig())
-		LogError("Cannot write Config to MMDVM");
+		LogDebug("Cannot write Config to MMDVM");
 }
 
 void CMMDVMHost::processEnableModeCommand(unsigned char mode, bool hasController, bool& modeEnabled, bool enableMode)

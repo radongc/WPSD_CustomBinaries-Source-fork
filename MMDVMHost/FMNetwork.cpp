@@ -84,7 +84,7 @@ CFMNetwork::~CFMNetwork()
 bool CFMNetwork::open()
 {
 	if (m_addrLen == 0U) {
-		LogError("Unable to resolve the address of the FM Gateway");
+		LogDebug("Unable to resolve the address of the FM Gateway");
 		return false;
 	}
 
@@ -95,9 +95,9 @@ bool CFMNetwork::open()
 			m_fp = ::fopen(m_squelchFile.c_str(), "wb");
 			if (m_fp == nullptr) {
 #if !defined(_WIN32) && !defined(_WIN64)
-				LogError("Cannot open the squelch file: %s, errno=%d", m_squelchFile.c_str(), errno);
+				LogDebug("Cannot open the squelch file: %s, errno=%d", m_squelchFile.c_str(), errno);
 #else
-				LogError("Cannot open the squelch file: %s, errno=%lu", m_squelchFile.c_str(), ::GetLastError());
+				LogDebug("Cannot open the squelch file: %s, errno=%lu", m_squelchFile.c_str(), ::GetLastError());
 #endif
 				return false;
 			}
@@ -106,7 +106,7 @@ bool CFMNetwork::open()
 
 #if !defined(HAS_SRC)
 	if ((m_protocol == FM_NETWORK_PROTOCOL::RAW) && (m_sampleRate != MMDVM_SAMPLERATE)) {
-		LogError("The resampler needed for non-native sample rates has not been included");
+		LogDebug("The resampler needed for non-native sample rates has not been included");
 		return false;
 	}
 #endif
@@ -232,7 +232,7 @@ bool CFMNetwork::writeRawData(const float* in, unsigned int nIn)
 
 		int ret = ::src_process(m_resampler, &data);
 		if (ret != 0) {
-			LogError("Error from the write resampler - %d - %s", ret, ::src_strerror(ret));
+			LogDebug("Error from the write resampler - %d - %s", ret, ::src_strerror(ret));
 			return false;
 		}
 
@@ -342,9 +342,9 @@ bool CFMNetwork::writeRawEnd()
 		size_t n = ::fwrite("Z", 1, 1, m_fp);
 		if (n != 1) {
 #if !defined(_WIN32) && !defined(_WIN64)
-			LogError("Cannot write to the squelch file: %s, errno=%d", m_squelchFile.c_str(), errno);
+			LogDebug("Cannot write to the squelch file: %s, errno=%d", m_squelchFile.c_str(), errno);
 #else
-			LogError("Cannot write to the squelch file: %s, errno=%lu", m_squelchFile.c_str(), ::GetLastError());
+			LogDebug("Cannot write to the squelch file: %s, errno=%lu", m_squelchFile.c_str(), ::GetLastError());
 #endif
 			return false;
 		}
@@ -443,7 +443,7 @@ unsigned int CFMNetwork::readData(float* out, unsigned int nOut)
 
 		int ret = ::src_process(m_resampler, &data);
 		if (ret != 0) {
-			LogError("Error from the read resampler - %d - %s", ret, ::src_strerror(ret));
+			LogDebug("Error from the read resampler - %d - %s", ret, ::src_strerror(ret));
 			return false;
 		}
 	} else {
@@ -595,9 +595,9 @@ bool CFMNetwork::writeRawStart()
 		size_t n = ::fwrite("O", 1, 1, m_fp);
 		if (n != 1) {
 #if !defined(_WIN32) && !defined(_WIN64)
-			LogError("Cannot write to the squelch file: %s, errno=%d", m_squelchFile.c_str(), errno);
+			LogDebug("Cannot write to the squelch file: %s, errno=%d", m_squelchFile.c_str(), errno);
 #else
-			LogError("Cannot write to the squelch file: %s, errno=%lu", m_squelchFile.c_str(), ::GetLastError());
+			LogDebug("Cannot write to the squelch file: %s, errno=%lu", m_squelchFile.c_str(), ::GetLastError());
 #endif
 			return false;
 		}

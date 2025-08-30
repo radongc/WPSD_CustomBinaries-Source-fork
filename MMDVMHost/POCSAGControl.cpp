@@ -510,7 +510,7 @@ void CPOCSAGControl::writeQueue()
 
 	unsigned int space = m_queue.freeSpace();
 	if (space < (len + 1U)) {
-		LogError("POCSAG, overflow in the POCSAG RF queue");
+		LogDebug("POCSAG, overflow in the POCSAG RF queue");
 		return;
 	}
 

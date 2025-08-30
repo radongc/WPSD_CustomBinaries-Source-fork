@@ -57,7 +57,7 @@ bool CPseudoTTYController::open()
 	char slave[300];
 	int result = ::openpty(&m_fd, &slavefd, slave, nullptr, nullptr);
 	if (result < 0) {
-		LogError("Cannot open the pseudo tty - errno : %d", errno);
+		LogDebug("Cannot open the pseudo tty - errno : %d", errno);
 		return false;
 	}
 
@@ -66,7 +66,7 @@ bool CPseudoTTYController::open()
 
 	int ret = ::symlink(slave, m_symlink.c_str());
 	if (ret != 0) {
-		LogError("Cannot make symlink to %s with %s", slave, m_symlink.c_str());
+		LogDebug("Cannot make symlink to %s with %s", slave, m_symlink.c_str());
 		close();
 		return false;
 	}

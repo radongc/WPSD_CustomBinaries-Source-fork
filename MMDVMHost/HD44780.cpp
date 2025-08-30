@@ -179,7 +179,7 @@ bool CHD44780::open()
 
 	m_fd = ::lcdInit(m_rows, m_cols, 4, m_rb, m_strb, m_d0, m_d1, m_d2, m_d3, 0, 0, 0, 0);
 	if (m_fd == -1) {
-		LogError("Unable to open the HD44780");
+		LogDebug("Unable to open the HD44780");
 		return false;
 	}
 	

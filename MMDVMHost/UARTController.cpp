@@ -70,13 +70,13 @@ bool CUARTController::open()
 
 	m_handle = ::CreateFileA(m_device.c_str(), GENERIC_READ | GENERIC_WRITE, 0, nullptr, OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, nullptr);
 	if (m_handle == INVALID_HANDLE_VALUE) {
-		LogError("Cannot open device - %s, err=%04lx", m_device.c_str(), ::GetLastError());
+		LogDebug("Cannot open device - %s, err=%04lx", m_device.c_str(), ::GetLastError());
 		return false;
 	}
 
 	DCB dcb;
 	if (::GetCommState(m_handle, &dcb) == 0) {
-		LogError("Cannot get the attributes for %s, err=%04lx", m_device.c_str(), ::GetLastError());
+		LogDebug("Cannot get the attributes for %s, err=%04lx", m_device.c_str(), ::GetLastError());
 		::ClearCommError(m_handle, &errCode, nullptr);
 		::CloseHandle(m_handle);
 		return false;
@@ -96,7 +96,7 @@ bool CUARTController::open()
 	dcb.fRtsControl     = RTS_CONTROL_DISABLE;
 
 	if (::SetCommState(m_handle, &dcb) == 0) {
-		LogError("Cannot set the attributes for %s, err=%04lx", m_device.c_str(), ::GetLastError());
+		LogDebug("Cannot set the attributes for %s, err=%04lx", m_device.c_str(), ::GetLastError());
 		::ClearCommError(m_handle, &errCode, nullptr);
 		::CloseHandle(m_handle);
 		return false;
@@ -104,7 +104,7 @@ bool CUARTController::open()
 
 	COMMTIMEOUTS timeouts;
 	if (!::GetCommTimeouts(m_handle, &timeouts)) {
-		LogError("Cannot get the timeouts for %s, err=%04lx", m_device.c_str(), ::GetLastError());
+		LogDebug("Cannot get the timeouts for %s, err=%04lx", m_device.c_str(), ::GetLastError());
 		::ClearCommError(m_handle, &errCode, nullptr);
 		::CloseHandle(m_handle);
 		return false;
@@ -115,21 +115,21 @@ bool CUARTController::open()
 	timeouts.ReadTotalTimeoutConstant   = 0UL;
 
 	if (!::SetCommTimeouts(m_handle, &timeouts)) {
-		LogError("Cannot set the timeouts for %s, err=%04lx", m_device.c_str(), ::GetLastError());
+		LogDebug("Cannot set the timeouts for %s, err=%04lx", m_device.c_str(), ::GetLastError());
 		::ClearCommError(m_handle, &errCode, nullptr);
 		::CloseHandle(m_handle);
 		return false;
 	}
 
 	if (::EscapeCommFunction(m_handle, CLRDTR) == 0) {
-		LogError("Cannot clear DTR for %s, err=%04lx", m_device.c_str(), ::GetLastError());
+		LogDebug("Cannot clear DTR for %s, err=%04lx", m_device.c_str(), ::GetLastError());
 		::ClearCommError(m_handle, &errCode, nullptr);
 		::CloseHandle(m_handle);
 		return false;
 	}
 
 	if (::EscapeCommFunction(m_handle, m_assertRTS ? SETRTS : CLRRTS) == 0) {
-		LogError("Cannot set/clear RTS for %s, err=%04lx", m_device.c_str(), ::GetLastError());
+		LogDebug("Cannot set/clear RTS for %s, err=%04lx", m_device.c_str(), ::GetLastError());
 		::ClearCommError(m_handle, &errCode, nullptr);
 		::CloseHandle(m_handle);
 		return false;
@@ -173,7 +173,7 @@ int CUARTController::readNonblock(unsigned char* buffer, unsigned int length)
 	DWORD errors;
 	COMSTAT status;
 	if (::ClearCommError(m_handle, &errors, &status) == 0) {
-		LogError("Error from ClearCommError for %s, err=%04lx", m_device.c_str(), ::GetLastError());
+		LogDebug("Error from ClearCommError for %s, err=%04lx", m_device.c_str(), ::GetLastError());
 		return -1;
 	}
 
@@ -187,7 +187,7 @@ int CUARTController::readNonblock(unsigned char* buffer, unsigned int length)
 	DWORD bytes = 0UL;
 	BOOL ret = ::ReadFile(m_handle, buffer, readLength, &bytes, nullptr);
 	if (!ret) {
-		LogError("Error from ReadFile for %s: %04lx", m_device.c_str(), ::GetLastError());
+		LogDebug("Error from ReadFile for %s: %04lx", m_device.c_str(), ::GetLastError());
 		return -1;
 	}
 
@@ -208,7 +208,7 @@ int CUARTController::write(const unsigned char* buffer, unsigned int length)
 		DWORD bytes = 0UL;
 		BOOL ret = ::WriteFile(m_handle, buffer + ptr, length - ptr, &bytes, nullptr);
 		if (!ret) {
-			LogError("Error from WriteFile for %s: %04lx", m_device.c_str(), ::GetLastError());
+			LogDebug("Error from WriteFile for %s: %04lx", m_device.c_str(), ::GetLastError());
 			return -1;
 		}
 
@@ -259,7 +259,7 @@ bool CUARTController::open()
 	m_fd = ::open(m_device.c_str(), O_RDWR | O_NOCTTY | O_NDELAY, 0);
 #endif
 	if (m_fd < 0) {
-		LogError("Cannot open device - %s", m_device.c_str());
+		LogDebug("Cannot open device - %s", m_device.c_str());
 		return false;
 	}
 
@@ -273,7 +273,7 @@ bool CUARTController::setRaw()
 {
 	termios termios;
 	if (::tcgetattr(m_fd, &termios) < 0) {
-		LogError("Cannot get the attributes for %s", m_device.c_str());
+		LogDebug("Cannot get the attributes for %s", m_device.c_str());
 		::close(m_fd);
 		return false;
 	}
@@ -363,13 +363,13 @@ bool CUARTController::setRaw()
                         break;
 #endif /*B500000*/
 		default:
-			LogError("Unsupported serial port speed - %u", m_speed);
+			LogDebug("Unsupported serial port speed - %u", m_speed);
 			::close(m_fd);
 			return false;
 	}
 
 	if (::tcsetattr(m_fd, TCSANOW, &termios) < 0) {
-		LogError("Cannot set the attributes for %s", m_device.c_str());
+		LogDebug("Cannot set the attributes for %s", m_device.c_str());
 		::close(m_fd);
 		return false;
 	}
@@ -377,7 +377,7 @@ bool CUARTController::setRaw()
 	if (m_assertRTS) {
 		unsigned int y;
 		if (::ioctl(m_fd, TIOCMGET, &y) < 0) {
-			LogError("Cannot get the control attributes for %s", m_device.c_str());
+			LogDebug("Cannot get the control attributes for %s", m_device.c_str());
 			::close(m_fd);
 			return false;
 		}
@@ -385,7 +385,7 @@ bool CUARTController::setRaw()
 		y |= TIOCM_RTS;
 
 		if (::ioctl(m_fd, TIOCMSET, &y) < 0) {
-			LogError("Cannot set the control attributes for %s", m_device.c_str());
+			LogDebug("Cannot set the control attributes for %s", m_device.c_str());
 			::close(m_fd);
 			return false;
 		}
@@ -439,7 +439,7 @@ int CUARTController::read(unsigned char* buffer, unsigned int length)
 		}
 
 		if (n < 0) {
-			LogError("Error from select(), errno=%d", errno);
+			LogDebug("Error from select(), errno=%d", errno);
 			return -1;
 		}
 
@@ -447,7 +447,7 @@ int CUARTController::read(unsigned char* buffer, unsigned int length)
 			ssize_t len = ::read(m_fd, buffer + offset, length - offset);
 			if (len < 0) {
 				if (errno != EAGAIN) {
-					LogError("Error from read(), errno=%d", errno);
+					LogDebug("Error from read(), errno=%d", errno);
 					return -1;
 				}
 			}
@@ -495,7 +495,7 @@ int CUARTController::write(const unsigned char* buffer, unsigned int length)
 			n = ::write(m_fd, buffer + ptr, length - ptr);
 		if (n < 0) {
 			if (errno != EAGAIN) {
-				LogError("Error returned from write(), errno=%d", errno);
+				LogDebug("Error returned from write(), errno=%d", errno);
 				return -1;
 			}
 		}

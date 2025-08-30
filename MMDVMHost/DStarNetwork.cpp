@@ -66,7 +66,7 @@ CDStarNetwork::~CDStarNetwork()
 bool CDStarNetwork::open()
 {
 	if (m_addrLen == 0U) {
-		LogError("Unable to resolve the address of the ircDDB Gateway");
+		LogDebug("Unable to resolve the address of the ircDDB Gateway");
 		return false;
 	}
 

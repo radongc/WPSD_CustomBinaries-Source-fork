@@ -131,7 +131,7 @@ bool CTFTSurenoo::open()
 {
 	bool ret = m_serial->open();
 	if (!ret) {
-		LogError("Cannot open the port for the TFT Serial");
+		LogDebug("Cannot open the port for the TFT Serial");
 		delete m_serial;
 		return false;
 	}

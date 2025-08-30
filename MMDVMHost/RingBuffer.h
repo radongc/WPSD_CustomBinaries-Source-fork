@@ -50,7 +50,7 @@ public:
 	bool addData(const T* buffer, unsigned int nSamples)
 	{
 		if (nSamples >= freeSpace()) {
-			LogError("%s buffer overflow, clearing the buffer. (%u >= %u)", m_name, nSamples, freeSpace());
+			LogDebug("%s buffer overflow, clearing the buffer. (%u >= %u)", m_name, nSamples, freeSpace());
 			clear();
 			return false;
 		}
@@ -68,7 +68,7 @@ public:
 	bool getData(T* buffer, unsigned int nSamples)
 	{
 		if (dataSize() < nSamples) {
-			LogError("**** Underflow in %s ring buffer, %u < %u", m_name, dataSize(), nSamples);
+			LogDebug("**** Underflow in %s ring buffer, %u < %u", m_name, dataSize(), nSamples);
 			return false;
 		}
 
@@ -85,7 +85,7 @@ public:
 	bool peek(T* buffer, unsigned int nSamples)
 	{
 		if (dataSize() < nSamples) {
-			LogError("**** Underflow peek in %s ring buffer, %u < %u", m_name, dataSize(), nSamples);
+			LogDebug("**** Underflow peek in %s ring buffer, %u < %u", m_name, dataSize(), nSamples);
 			return false;
 		}
 

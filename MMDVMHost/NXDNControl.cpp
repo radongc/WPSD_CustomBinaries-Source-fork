@@ -1019,7 +1019,7 @@ void CNXDNControl::writeQueueRF(const unsigned char *data)
 
 	unsigned int space = m_queue.freeSpace();
 	if (space < (len + 1U)) {
-		LogError("NXDN, overflow in the NXDN RF queue");
+		LogDebug("NXDN, overflow in the NXDN RF queue");
 		return;
 	}
 
@@ -1039,7 +1039,7 @@ void CNXDNControl::writeQueueNet(const unsigned char *data)
 
 	unsigned int space = m_queue.freeSpace();
 	if (space < (len + 1U)) {
-		LogError("NXDN, overflow in the NXDN RF queue");
+		LogDebug("NXDN, overflow in the NXDN RF queue");
 		return;
 	}
 

@@ -114,7 +114,7 @@ void CDMRControl::clock()
 			switch (slotNo) {
 				case 1U: m_slot1.writeNetwork(data); break;
 				case 2U: m_slot2.writeNetwork(data); break;
-				default: LogError("Invalid slot no %u", slotNo); break;
+				default: LogDebug("Invalid slot no %u", slotNo); break;
 			}
 		}
 	}

@@ -85,7 +85,7 @@ CNXDNKenwoodNetwork::~CNXDNKenwoodNetwork()
 bool CNXDNKenwoodNetwork::open()
 {
 	if (m_rtcpAddrLen == 0U || m_rtpAddrLen == 0U) {
-		LogError("Unable to resolve the address of the NXDN Gateway");
+		LogDebug("Unable to resolve the address of the NXDN Gateway");
 		return false;
 	}
 
@@ -814,7 +814,7 @@ unsigned int CNXDNKenwoodNetwork::readRTCP(unsigned char* data)
 		CUtils::dump(1U, "Kenwood Network RTCP Data Received", buffer, length);
 
 	if (::memcmp(buffer + 8U, "KWNE", 4U) != 0) {
-		LogError("Missing RTCP KWNE signature");
+		LogDebug("Missing RTCP KWNE signature");
 		return 0U;
 	}
 

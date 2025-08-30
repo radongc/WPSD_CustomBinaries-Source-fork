@@ -50,7 +50,7 @@ CNXDNIcomNetwork::~CNXDNIcomNetwork()
 bool CNXDNIcomNetwork::open()
 {
 	if (m_addrLen == 0U) {
-		LogError("Unable to resolve the address of the NXDN Gateway");
+		LogDebug("Unable to resolve the address of the NXDN Gateway");
 		return false;
 	}
 

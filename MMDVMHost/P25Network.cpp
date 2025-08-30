@@ -107,7 +107,7 @@ CP25Network::~CP25Network()
 bool CP25Network::open()
 {
 	if (m_addrLen == 0U) {
-		LogError("Unable to resolve the address of the P25 Gateway");
+		LogDebug("Unable to resolve the address of the P25 Gateway");
 		return false;
 	}
 

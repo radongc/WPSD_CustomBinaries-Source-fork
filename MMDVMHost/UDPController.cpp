@@ -45,7 +45,7 @@ CUDPController::~CUDPController()
 bool CUDPController::open()
 {
 	if (m_addrLen == 0U) {
-		LogError("Unable to resolve the address of the modem");
+		LogDebug("Unable to resolve the address of the modem");
 		return false;
 	}
 

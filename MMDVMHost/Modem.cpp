@@ -771,7 +771,7 @@ void CModem::clock(unsigned int ms)
 				break;
 
 			case MMDVM_NAK:
-				LogWarning("Received a NAK from the MMDVM, command = 0x%02X, reason = %u", m_buffer[m_offset], m_buffer[m_offset + 1U]);
+				LogDebug("Received a NAK from the MMDVM, command = 0x%02X, reason = %u", m_buffer[m_offset], m_buffer[m_offset + 1U]);
 				break;
 
 			case MMDVM_DEBUG1:

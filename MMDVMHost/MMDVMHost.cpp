@@ -1907,7 +1907,7 @@ void CMMDVMHost::setMode(unsigned char mode)
 			m_modeTimer.start();
 			m_cwIdTimer.stop();
 			createLockFile("D-Star");
-			LogMessage("Mode set to D-Star");
+			LogDebug("Mode set to D-Star");
 		}
 		break;
 
@@ -1950,7 +1950,7 @@ void CMMDVMHost::setMode(unsigned char mode)
 			m_modeTimer.start();
 			m_cwIdTimer.stop();
 			createLockFile("DMR");
-			LogMessage("Mode set to DMR");
+			LogDebug("Mode set to DMR");
 		}
 		break;
 
@@ -1989,7 +1989,7 @@ void CMMDVMHost::setMode(unsigned char mode)
 			m_modeTimer.start();
 			m_cwIdTimer.stop();
 			createLockFile("System Fusion");
-			LogMessage("Mode set to System Fusion");
+			LogDebug("Mode set to System Fusion");
 		}
 		break;
 
@@ -2028,7 +2028,7 @@ void CMMDVMHost::setMode(unsigned char mode)
 			m_modeTimer.start();
 			m_cwIdTimer.stop();
 			createLockFile("P25");
-			LogMessage("Mode set to P25");
+			LogDebug("Mode set to P25");
 		}
 		break;
 
@@ -2067,7 +2067,7 @@ void CMMDVMHost::setMode(unsigned char mode)
 			m_modeTimer.start();
 			m_cwIdTimer.stop();
 			createLockFile("NXDN");
-			LogMessage("Mode set to NXDN");
+			LogDebug("Mode set to NXDN");
 		}
 		break;
 
@@ -2105,7 +2105,7 @@ void CMMDVMHost::setMode(unsigned char mode)
 		m_modeTimer.start();
 		m_cwIdTimer.stop();
 		createLockFile("POCSAG");
-		LogMessage("Mode set to POCSAG");
+		LogDebug("Mode set to POCSAG");
 		break;
 
 	case MODE_FM:
@@ -2148,7 +2148,7 @@ void CMMDVMHost::setMode(unsigned char mode)
 			m_modeTimer.start();
 			m_cwIdTimer.stop();
 			createLockFile("FM");
-			LogMessage("Mode set to FM");
+			LogDebug("Mode set to FM");
 		}
 		break;
 
@@ -2191,11 +2191,11 @@ void CMMDVMHost::setMode(unsigned char mode)
 		m_modeTimer.stop();
 		m_cwIdTimer.stop();
 		removeLockFile();
-		LogMessage("Mode set to Lockout");
+		LogDebug("Mode set to Lockout");
 		break;
 
 	case MODE_ERROR:
-		LogMessage("Mode set to Error");
+		LogDebug("Mode set to Error");
 		if (m_dstarNetwork != nullptr)
 			m_dstarNetwork->enable(false);
 		if (m_dmrNetwork != nullptr)
@@ -2233,7 +2233,7 @@ void CMMDVMHost::setMode(unsigned char mode)
 		m_modeTimer.stop();
 		m_cwIdTimer.stop();
 		removeLockFile();
-		LogMessage("Mode set to Error");
+		LogDebug("Mode set to Error");
 		break;
 
 	default:
@@ -2284,7 +2284,7 @@ void CMMDVMHost::setMode(unsigned char mode)
 		m_mode = MODE_IDLE;
 		m_modeTimer.stop();
 		removeLockFile();
-		LogMessage("Mode set to Idle");
+		LogDebug("Mode set to Idle");
 		break;
 	}
 }

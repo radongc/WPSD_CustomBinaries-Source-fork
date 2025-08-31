@@ -374,7 +374,7 @@ bool CDStarControl::writeModem(unsigned char *data, unsigned int len)
 			unsigned char type = m_rfSlowData.getType();
 
 			if (type == DSTAR_SLOW_DATA_TYPE_FASTDATA_BEGIN) {
-				LogMessage("D-Star, starting fast data mode");
+				LogDebug("D-Star, starting fast data mode");
 				m_rfState = RPT_RF_STATE::DATA;
 			}
 		}
@@ -400,7 +400,7 @@ bool CDStarControl::writeModem(unsigned char *data, unsigned int len)
 			if (complete) {
 				unsigned char type = m_rfSlowData.getType();
 				if (type == DSTAR_SLOW_DATA_TYPE_FASTDATA_END) {
-					LogMessage("D-Star, leaving fast data mode");
+					LogDebug("D-Star, leaving fast data mode");
 					m_rfState = RPT_RF_STATE::AUDIO;
 				}
 			}
@@ -427,7 +427,7 @@ bool CDStarControl::writeModem(unsigned char *data, unsigned int len)
 			if (m_rfN != 0U) {
 				const unsigned char* text = m_rfSlowData.getText();
 				if (text != nullptr)
-					LogMessage("D-Star, RF slow data text = \"%s\"", text);
+					LogDebug("D-Star, RF slow data text = \"%s\"", text);
 			}
 
 			if (m_net)
@@ -751,7 +751,7 @@ void CDStarControl::writeNetwork()
 				if (m_netState == RPT_NET_STATE::AUDIO) {
 					unsigned char type = m_netSlowData.getType();
 					if (type == DSTAR_SLOW_DATA_TYPE_FASTDATA_BEGIN) {
-						LogMessage("D-Star, starting fast data mode");
+						LogDebug("D-Star, starting fast data mode");
 						m_netState = RPT_NET_STATE::DATA;
 					}
 				}
@@ -783,7 +783,7 @@ void CDStarControl::writeNetwork()
 			if (m_netN != 0U) {
 				const unsigned char* text = m_netSlowData.getText();
 				if (text != nullptr)
-					LogMessage("D-Star, network slow data text = \"%s\"", text);
+					LogDebug("D-Star, network slow data text = \"%s\"", text);
 			}
 
 			m_packetTimer.start();
@@ -807,7 +807,7 @@ void CDStarControl::writeNetwork()
 				if (complete) {
 					unsigned char type = m_netSlowData.getType();
 					if (type == DSTAR_SLOW_DATA_TYPE_FASTDATA_END) {
-						LogMessage("D-Star, leaving fast data mode");
+						LogDebug("D-Star, leaving fast data mode");
 						m_netState = RPT_NET_STATE::AUDIO;
 					}
 				}

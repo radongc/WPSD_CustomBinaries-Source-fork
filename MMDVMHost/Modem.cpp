@@ -227,7 +227,8 @@ m_fmExtAudioBoost(1U),
 m_fmMaxDevLevel(90.0F),
 m_fmExtEnable(false),
 m_capabilities1(0x00U),
-m_capabilities2(0x00U)
+m_capabilities2(0x00U),
+m_serialDataLen(0U)
 {
 	m_buffer = new unsigned char[BUFFER_LENGTH];
 }
@@ -783,10 +784,61 @@ void CModem::clock(unsigned int ms)
 				printDebug();
 				break;
 
+			//case MMDVM_SERIAL_DATA:
+			//	if (m_trace)
+			//		CUtils::dump(1U, "RX Serial Data", m_buffer, m_length);
+			//	m_rxSerialData.addData(m_buffer + m_offset, m_length - m_offset);
+			//	break;
+
+			// Code changed to bring the Nextion Button Pushes back to life
 			case MMDVM_SERIAL_DATA:
 				if (m_trace)
 					CUtils::dump(1U, "RX Serial Data", m_buffer, m_length);
+				
+				// Original: Add to serial data buffer
 				m_rxSerialData.addData(m_buffer + m_offset, m_length - m_offset);
+				
+				// NEW: Buffer serial data and forward complete commands as transparent data
+				{
+					// Add received bytes to our accumulation buffer
+					for (unsigned int i = 0; i < (m_length - m_offset); i++) {
+						if (m_serialDataLen < 256) {
+							m_serialDataBuffer[m_serialDataLen++] = m_buffer[m_offset + i];
+							
+							// Check for Nextion command terminator (0xFF 0xFF 0xFF)
+							if (m_serialDataLen >= 3 && 
+								m_serialDataBuffer[m_serialDataLen - 3] == 0xFF &&
+								m_serialDataBuffer[m_serialDataLen - 2] == 0xFF &&
+								m_serialDataBuffer[m_serialDataLen - 1] == 0xFF) {
+								
+								// We have a complete command
+								// Add it to the RX transparent data queue so it will be forwarded to NextionDriver
+								// With sendFrameType=1, we need to include the frame type byte
+								
+								// Create a buffer with frame type byte + command data
+								unsigned char frameBuffer[260];
+								frameBuffer[0] = 0x90;  // Frame type: transparent data
+								::memcpy(frameBuffer + 1, m_serialDataBuffer, m_serialDataLen);
+								
+								// Add length byte and data with frame type to RX queue
+								unsigned char len = m_serialDataLen + 1U;  // +1 for frame type byte
+								m_rxTransparentData.addData(&len, 1U);
+								m_rxTransparentData.addData(frameBuffer, len);
+								
+								if (m_trace) {
+									CUtils::dump(1U, "Adding button command with frame type to RX Transparent queue", frameBuffer, len);
+								}
+								
+								// Reset buffer for next command
+								m_serialDataLen = 0U;
+							}
+						} else {
+							// Buffer overflow, reset
+							LogDebug("Serial data buffer overflow, resetting");
+							m_serialDataLen = 0U;
+						}
+					}
+				}
 				break;
 
 			default:
@@ -832,7 +884,7 @@ void CModem::clock(unsigned int ms)
 
 			int ret = m_port->write(m_buffer, len);
 			if (ret != int(len))
-				LogWarning("Error when writing D-Star data to the MMDVM");
+				LogDebug("Error when writing D-Star data to the MMDVM");
 
 			m_playoutTimer.start();
 		}
@@ -848,7 +900,7 @@ void CModem::clock(unsigned int ms)
 
 		int ret = m_port->write(m_buffer, len);
 		if (ret != int(len))
-			LogWarning("Error when writing DMR data to the MMDVM");
+			LogDebug("Error when writing DMR data to the MMDVM");
 
 		m_playoutTimer.start();
 
@@ -865,7 +917,7 @@ void CModem::clock(unsigned int ms)
 
 		int ret = m_port->write(m_buffer, len);
 		if (ret != int(len))
-			LogWarning("Error when writing DMR data to the MMDVM");
+			LogDebug("Error when writing DMR data to the MMDVM");
 
 		m_playoutTimer.start();
 
@@ -882,7 +934,7 @@ void CModem::clock(unsigned int ms)
 
 		int ret = m_port->write(m_buffer, len);
 		if (ret != int(len))
-			LogWarning("Error when writing YSF data to the MMDVM");
+			LogDebug("Error when writing YSF data to the MMDVM");
 
 		m_playoutTimer.start();
 
@@ -903,7 +955,7 @@ void CModem::clock(unsigned int ms)
 
 		int ret = m_port->write(m_buffer, len);
 		if (ret != int(len))
-			LogWarning("Error when writing P25 data to the MMDVM");
+			LogDebug("Error when writing P25 data to the MMDVM");
 
 		m_playoutTimer.start();
 
@@ -920,7 +972,7 @@ void CModem::clock(unsigned int ms)
 
 		int ret = m_port->write(m_buffer, len);
 		if (ret != int(len))
-			LogWarning("Error when writing NXDN data to the MMDVM");
+			LogDebug("Error when writing NXDN data to the MMDVM");
 
 		m_playoutTimer.start();
 
@@ -937,7 +989,7 @@ void CModem::clock(unsigned int ms)
 
 		int ret = m_port->write(m_buffer, len);
 		if (ret != int(len))
-			LogWarning("Error when writing POCSAG data to the MMDVM");
+			LogDebug("Error when writing POCSAG data to the MMDVM");
 
 		m_playoutTimer.start();
 
@@ -958,7 +1010,7 @@ void CModem::clock(unsigned int ms)
 
 		int ret = m_port->write(m_buffer, len);
 		if (ret != int(len))
-			LogWarning("Error when writing FM data to the MMDVM");
+			LogDebug("Error when writing FM data to the MMDVM");
 
 		m_playoutTimer.start();
 
@@ -975,7 +1027,7 @@ void CModem::clock(unsigned int ms)
 
 		int ret = m_port->write(m_buffer, len);
 		if (ret != int(len))
-			LogWarning("Error when writing Transparent data to the MMDVM");
+			LogDebug("Error when writing Transparent data to the MMDVM");
 	}
 
 	if (!m_txSerialData.isEmpty()) {
@@ -988,7 +1040,7 @@ void CModem::clock(unsigned int ms)
 
 		int ret = m_port->write(m_buffer, len);
 		if (ret != int(len))
-			LogWarning("Error when writing Serial data to the MMDVM");
+			LogDebug("Error when writing Serial data to the MMDVM");
 	}
 }
 

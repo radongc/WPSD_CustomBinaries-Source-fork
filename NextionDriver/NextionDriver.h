@@ -19,7 +19,7 @@
 #if !defined(NextionDriver_H)
 #define NextionDriver_H
 
-#define NextionDriver_VERSION "1.30.1_WPSD"
+#define NextionDriver_VERSION "1.30.2_WPSD"
 
 #define TRUE	1
 #define FALSE	0

@@ -108,9 +108,10 @@ void basicFunctions() {
 
     // if date/time is sent, check IP interface from time to time:
     //   and disk free in % and data files
+    static int dnsRotate = 0;
     if ((page==0)&&(strstr(TXbuffer,"t2.txt=")>0)&&(check++>100)) {
         getNetworkInterface(ipaddr);
-        netIsActive[0]=getInternetStatus(check);
+        netIsActive[0]=getInternetStatus(dnsRotate++);
         sprintf(TXbuffer, "t3.txt=\"%s\"", ipaddr);
         check=0;
     }

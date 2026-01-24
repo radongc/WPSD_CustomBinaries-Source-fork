@@ -386,10 +386,13 @@ bool CP25Data::decodeTSDU(const unsigned char* data)
 
     switch (m_lcf) {
 	    case P25_LCF_GROUP:
-		// Group Voice Channel Grant/User - format: Options(16) + GroupAddr(16) + SourceAddr(24) + Reserved(8)
-		// For conventional systems, we extract Group ID and Source ID
-		m_dstId = (unsigned int)((tsbkValue >> 32) & 0xFFFFU);      // Group Address (16 bits)
-		m_srcId = (unsigned int)((tsbkValue >> 8) & 0xFFFFFFU);     // Source Radio Address (24 bits)
+		// Group Voice Channel User - format: Options(24) + GroupAddr(16) + SourceAddr(24) = 64 bits
+		// Bits 63-40: Service Options/Reserved (24 bits)
+		// Bits 39-24: Group Address (16 bits)
+		// Bits 23-0: Source Address (24 bits)
+		m_emergency = ((tsbkValue >> 63) & 0x01U) == 0x01U;         // Emergency flag (bit 63)
+		m_dstId = (unsigned int)((tsbkValue >> 24) & 0xFFFFU);      // Group Address (16 bits)
+		m_srcId = (unsigned int)(tsbkValue & 0xFFFFFFU);            // Source Radio Address (24 bits)
 		break;
 	    case P25_LCF_TSBK_CALL_ALERT:
 		m_dstId = (unsigned int)((tsbkValue >> 24) & 0xFFFFFFU);    // Target Radio Address
@@ -431,11 +434,13 @@ void CP25Data::encodeTSDU(unsigned char* data)
 		tsbkValue = (tsbkValue << 24) + (m_srcId & 0xFFFFFFU);      // Source Radio Address (24 bits)
 		break;
 	    case P25_LCF_GROUP:
-		// Group Voice Channel User - format: Options(16) + GroupAddr(16) + SourceAddr(24) + Reserved(8)
-		tsbkValue = 0U;                                             // Options (16 bits)
+		// Group Voice Channel User - format: Options(24) + GroupAddr(16) + SourceAddr(24) = 64 bits
+		// Bits 63-40: Service Options/Reserved (bit 63 = emergency)
+		// Bits 39-24: Group Address (16 bits)
+		// Bits 23-0: Source Address (24 bits)
+		tsbkValue = m_emergency ? 0x800000ULL : 0x000000ULL;        // Emergency flag in bit 63 + reserved (24 bits total)
 		tsbkValue = (tsbkValue << 16) + (m_dstId & 0xFFFFU);        // Group Address (16 bits)
 		tsbkValue = (tsbkValue << 24) + (m_srcId & 0xFFFFFFU);      // Source Radio Address (24 bits)
-		tsbkValue = (tsbkValue << 8) + 0U;                          // Reserved (8 bits)
 		break;
 	    case P25_LCF_TSBK_CALL_ALERT:
 		tsbkValue = 0U;

@@ -444,7 +444,20 @@ bool CP25Control::writeModem(unsigned char* data, unsigned int len)
 			if (m_duplex) {
 				data[0U] = TAG_DATA;
 				data[1U] = 0x00U;
+
 				writeQueueRF(data, P25_TSDU_FRAME_LENGTH_BYTES + 2U);
+
+				// CRITICAL: Immediately flush to modem - TPT timing is critical
+				if (m_modem != nullptr) {
+					// Read from our queue and write directly to modem
+					unsigned char txData[300U];
+					unsigned int len = readModem(txData);
+					if (len > 0U) {
+						m_modem->writeP25Data(txData, len);
+						m_modem->flushP25Data();
+						LogMessage("P25, flushed TPT response directly to modem");
+					}
+				}
 			}
 			break;
 		case P25_LCF_TSBK_CALL_ALERT:

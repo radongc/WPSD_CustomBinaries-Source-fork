@@ -418,6 +418,34 @@ bool CP25Control::writeModem(unsigned char* data, unsigned int len)
 		unsigned char data[P25_TSDU_FRAME_LENGTH_BYTES + 2U];
 	
 		switch (m_rfData.getLCF()) {
+		case P25_LCF_GROUP:
+			// Handle Group Voice Channel User (Talk Permit Tone request)
+			// Echo the TSDU back like a repeater - this is what the radio expects
+			LogMessage("P25, received RF TSDU transmission, GROUP VOICE CH USER from %s to TG %u", source.c_str(), dstId);
+			::memset(data + 2U, 0x00U, P25_TSDU_FRAME_LENGTH_BYTES);
+
+			// Regenerate Sync
+			CSync::addP25Sync(data + 2U);
+
+			// Regenerate NID
+			m_nid.encode(data + 2U, P25_DUID_TSDU);
+
+			// Regenerate TSDU Data
+			m_rfData.encodeTSDU(data + 2U);
+
+			// Add busy bits
+			addBusyBits(data + 2U, P25_TSDU_FRAME_LENGTH_BITS, false, true);
+
+			// Set first busy bits to 1,1
+			setBusyBits(data + 2U, P25_SS0_START, true, true);
+
+			if (m_duplex) {
+				data[0U] = TAG_DATA;
+				data[1U] = 0x00U;
+
+				writeQueueRF(data, P25_TSDU_FRAME_LENGTH_BYTES + 2U);
+			}
+			break;
 		case P25_LCF_TSBK_CALL_ALERT:
 			LogMessage("P25, received RF TSDU transmission, CALL ALERT from %s to %s%u", source.c_str(), grp ? "TG " : "", dstId);
 			::memset(data + 2U, 0x00U, P25_TSDU_FRAME_LENGTH_BYTES);

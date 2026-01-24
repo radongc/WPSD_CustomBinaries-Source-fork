@@ -54,7 +54,6 @@ m_netState(RPT_NET_STATE::IDLE),
 m_rfTimeout(1000U, timeout),
 m_netTimeout(1000U, timeout),
 m_networkWatchdog(1000U, 0U, 1500U),
-m_idleTimer(1000U, 0U, 100U),
 m_rfFrames(0U),
 m_rfBits(0U),
 m_rfErrs(0U),
@@ -793,54 +792,6 @@ void CP25Control::clock(unsigned int ms)
 
 	m_rfTimeout.clock(ms);
 	m_netTimeout.clock(ms);
-	m_idleTimer.clock(ms);
-
-	// Pre-emptive idle transmission for Talk Permit Tone support
-	// When the channel is idle, periodically transmit a TSDU so the radio
-	// knows the repeater is active and ready to accept transmissions
-	// NOTE: Only works in duplex mode
-	if (!m_duplex) {
-		// Simplex mode - idle transmission disabled
-	} else if (m_rfState != RPT_RF_STATE::LISTENING || m_netState != RPT_NET_STATE::IDLE) {
-		// Not idle - stop timer
-		m_idleTimer.stop();
-	} else {
-		if (!m_idleTimer.isRunning()) {
-			m_idleTimer.start();
-			LogMessage("P25, started idle timer for TPT");
-		} else if (m_idleTimer.hasExpired()) {
-			// Send an idle TSDU
-			unsigned char data[P25_TSDU_FRAME_LENGTH_BYTES + 2U];
-			::memset(data + 2U, 0x00U, P25_TSDU_FRAME_LENGTH_BYTES);
-
-			// Regenerate Sync
-			CSync::addP25Sync(data + 2U);
-
-			// Regenerate NID
-			m_nid.encode(data + 2U, P25_DUID_TSDU);
-
-			// Create a simple idle TSDU - use system ID
-			CP25Data idleData;
-			idleData.setLCF(P25_LCF_GROUP);
-			idleData.setMFId(0x00U);
-			idleData.setDstId(0U);
-			idleData.setSrcId(m_id);
-			idleData.encodeTSDU(data + 2U);
-
-			// Add busy bits
-			addBusyBits(data + 2U, P25_TSDU_FRAME_LENGTH_BITS, false, true);
-			setBusyBits(data + 2U, P25_SS0_START, true, true);
-
-			data[0U] = TAG_DATA;
-			data[1U] = 0x00U;
-
-			writeQueueRF(data, P25_TSDU_FRAME_LENGTH_BYTES + 2U);
-
-			LogMessage("P25, sent idle TSDU for TPT pre-emption");
-
-			m_idleTimer.start();
-		}
-	}
 
 	if (m_netState == RPT_NET_STATE::AUDIO) {
 		m_networkWatchdog.clock(ms);
@@ -1321,6 +1272,43 @@ void CP25Control::closeFile()
 bool CP25Control::isBusy() const
 {
 	return (m_rfState != RPT_RF_STATE::LISTENING) || (m_netState != RPT_NET_STATE::IDLE);
+}
+
+bool CP25Control::sendIdleTSDU()
+{
+	if (!m_enabled || !m_duplex)
+		return false;
+
+	if (isBusy())
+		return false;
+
+	unsigned char data[P25_TSDU_FRAME_LENGTH_BYTES + 2U];
+	::memset(data + 2U, 0x00U, P25_TSDU_FRAME_LENGTH_BYTES);
+
+	// Add Sync
+	CSync::addP25Sync(data + 2U);
+
+	// Add NID
+	m_nid.encode(data + 2U, P25_DUID_TSDU);
+
+	// Create idle TSDU with system ID
+	CP25Data idleData;
+	idleData.setLCF(P25_LCF_GROUP);
+	idleData.setMFId(0x00U);
+	idleData.setDstId(0U);
+	idleData.setSrcId(m_id);
+	idleData.encodeTSDU(data + 2U);
+
+	// Add busy bits
+	addBusyBits(data + 2U, P25_TSDU_FRAME_LENGTH_BITS, false, true);
+	setBusyBits(data + 2U, P25_SS0_START, true, true);
+
+	data[0U] = TAG_DATA;
+	data[1U] = 0x00U;
+
+	writeQueueRF(data, P25_TSDU_FRAME_LENGTH_BYTES + 2U);
+
+	return true;
 }
 
 void CP25Control::enable(bool enabled)

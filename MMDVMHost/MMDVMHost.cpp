@@ -706,9 +706,6 @@ int CMMDVMHost::run()
 
 	LogInfo("MMDVMHost-%s is running", VERSION);
 
-	unsigned int p25IdleCounter = 0U;
-	const unsigned int P25_IDLE_INTERVAL = 20U;  // Send idle TSDU every ~100ms (20 iterations * 5ms)
-
 	while (!m_killed) {
 		bool lockout = m_modem->hasLockout();
 
@@ -993,27 +990,6 @@ int CMMDVMHost::run()
 						m_modeTimer.start();
 					} else if (m_mode != MODE_LOCKOUT) {
 						LogWarning("P25 data received when in mode %u", m_mode);
-					}
-				}
-			}
-		}
-
-		// P25 Talk Permit Tone: Send idle TSDU periodically when channel is idle
-		if (m_p25 != nullptr && m_p25Enabled && m_duplex) {
-			p25IdleCounter++;
-			if (p25IdleCounter >= P25_IDLE_INTERVAL) {
-				p25IdleCounter = 0U;
-				// Only send if truly idle (no active mode or in P25 mode but not busy)
-				if (m_mode == MODE_IDLE && !m_p25->isBusy() && m_modem->hasP25Space()) {
-					// Request P25Control to send an idle TSDU
-					if (m_p25->sendIdleTSDU()) {
-						// Data was queued, now send it
-						len = m_p25->readModem(data);
-						if (len > 0U) {
-							setMode(MODE_P25);
-							m_modem->writeP25Data(data, len);
-							LogMessage("P25, sent idle TSDU for TPT");
-						}
 					}
 				}
 			}

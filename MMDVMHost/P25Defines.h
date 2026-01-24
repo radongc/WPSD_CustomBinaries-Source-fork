@@ -57,8 +57,9 @@ const unsigned int  P25_MI_LENGTH_BYTES = 9U;
 
 const unsigned char P25_ALGO_UNENCRYPT = 0x80U;
 
-const unsigned char P25_LCF_GROUP   = 0x00U;
-const unsigned char P25_LCF_PRIVATE = 0x03U;
+const unsigned char P25_LCF_GROUP           = 0x00U;
+const unsigned char P25_LCF_GRP_VCH_GRANT   = 0x02U;
+const unsigned char P25_LCF_PRIVATE         = 0x03U;
 
 const unsigned char P25_LCF_TSBK_CALL_ALERT  = 0x1FU;
 const unsigned char P25_LCF_TSBK_ACK_RSP_FNE = 0x20U;

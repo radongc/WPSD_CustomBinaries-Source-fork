@@ -54,7 +54,6 @@ m_netState(RPT_NET_STATE::IDLE),
 m_rfTimeout(1000U, timeout),
 m_netTimeout(1000U, timeout),
 m_networkWatchdog(1000U, 0U, 1500U),
-m_warmupTimer(1000U, 10U),
 m_rfFrames(0U),
 m_rfBits(0U),
 m_rfErrs(0U),
@@ -793,44 +792,6 @@ void CP25Control::clock(unsigned int ms)
 
 	m_rfTimeout.clock(ms);
 	m_netTimeout.clock(ms);
-	m_warmupTimer.clock(ms);
-
-	// TX Warmup: Periodically send idle TSDU to keep TX active for faster TPT response
-	// Combined with high TXHang value (e.g., 60s), this keeps TX "warm"
-	if (m_duplex && m_rfState == RPT_RF_STATE::LISTENING && m_netState == RPT_NET_STATE::IDLE) {
-		if (!m_warmupTimer.isRunning()) {
-			m_warmupTimer.start();
-		} else if (m_warmupTimer.hasExpired()) {
-			// Send a warmup TSDU to keep TX active
-			unsigned char data[P25_TSDU_FRAME_LENGTH_BYTES + 2U];
-			::memset(data + 2U, 0x00U, P25_TSDU_FRAME_LENGTH_BYTES);
-
-			CSync::addP25Sync(data + 2U);
-			m_nid.encode(data + 2U, P25_DUID_TSDU);
-
-			// Create a minimal idle TSDU
-			CP25Data warmupData;
-			warmupData.setLCF(P25_LCF_GROUP);
-			warmupData.setMFId(0x00U);
-			warmupData.setDstId(0U);
-			warmupData.setSrcId(m_id);
-			warmupData.encodeTSDU(data + 2U);
-
-			addBusyBits(data + 2U, P25_TSDU_FRAME_LENGTH_BITS, false, true);
-			setBusyBits(data + 2U, P25_SS0_START, true, true);
-
-			data[0U] = TAG_DATA;
-			data[1U] = 0x00U;
-
-			writeQueueRF(data, P25_TSDU_FRAME_LENGTH_BYTES + 2U);
-
-			LogMessage("P25, sent TX warmup TSDU (keeping TX active for TPT)");
-
-			m_warmupTimer.start();
-		}
-	} else {
-		m_warmupTimer.stop();
-	}
 
 	if (m_netState == RPT_NET_STATE::AUDIO) {
 		m_networkWatchdog.clock(ms);

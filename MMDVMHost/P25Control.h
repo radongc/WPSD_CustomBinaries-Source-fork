@@ -66,6 +66,7 @@ private:
 	CTimer                     m_rfTimeout;
 	CTimer                     m_netTimeout;
 	CTimer                     m_networkWatchdog;
+	CTimer                     m_warmupTimer;
 	unsigned int               m_rfFrames;
 	unsigned int               m_rfBits;
 	unsigned int               m_rfErrs;

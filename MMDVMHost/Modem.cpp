@@ -176,7 +176,7 @@ m_txTransparentData(1000U, "Modem TX Transparent"),
 m_sendTransparentDataFrameType(0U),
 m_statusTimer(1000U, 0U, 250U),
 m_inactivityTimer(1000U, 2U),
-m_playoutTimer(1000U, 0U, 10U),
+m_playoutTimer(1000U, 0U, 1U),
 m_dstarSpace(0U),
 m_dmrSpace1(0U),
 m_dmrSpace2(0U),
@@ -1338,6 +1338,23 @@ bool CModem::writeP25Data(const unsigned char* data, unsigned int length)
 	m_txP25Data.addData(buffer, len);
 
 	return true;
+}
+
+void CModem::flushP25Data()
+{
+	// Immediately flush all P25 TX data - bypasses playout timer
+	// Used for time-critical responses like Talk Permit Tone
+	while (!m_txP25Data.isEmpty()) {
+		unsigned char len = 0U;
+		m_txP25Data.getData(&len, 1U);
+		m_txP25Data.getData(m_buffer, len);
+
+		int ret = m_port->write(m_buffer, len);
+		if (ret != int(len)) {
+			LogDebug("Error when flushing P25 data to the MMDVM");
+			break;
+		}
+	}
 }
 
 bool CModem::hasNXDNSpace() const

@@ -23,6 +23,7 @@
 #include "P25Utils.h"
 #include "Utils.h"
 #include "Sync.h"
+#include "Modem.h"
 #include "CRC.h"
 #include "Log.h"
 
@@ -38,7 +39,8 @@ const unsigned char BIT_MASK_TABLE[] = {0x80U, 0x40U, 0x20U, 0x10U, 0x08U, 0x04U
 #define WRITE_BIT(p,i,b) p[(i)>>3] = (b) ? (p[(i)>>3] | BIT_MASK_TABLE[(i)&7]) : (p[(i)>>3] & ~BIT_MASK_TABLE[(i)&7])
 #define READ_BIT(p,i)    (p[(i)>>3] & BIT_MASK_TABLE[(i)&7])
 
-CP25Control::CP25Control(unsigned int nac, unsigned int id, bool selfOnly, bool uidOverride, CP25Network* network, CDisplay* display, unsigned int timeout, bool duplex, CDMRLookup* lookup, bool remoteGateway, CRSSIInterpolator* rssiMapper) :
+CP25Control::CP25Control(unsigned int nac, unsigned int id, bool selfOnly, bool uidOverride, CP25Network* network, CDisplay* display, unsigned int timeout, bool duplex, CDMRLookup* lookup, bool remoteGateway, CRSSIInterpolator* rssiMapper, CModem* modem) :
+m_modem(modem),
 m_nac(nac),
 m_id(id),
 m_selfOnly(selfOnly),
@@ -444,6 +446,18 @@ bool CP25Control::writeModem(unsigned char* data, unsigned int len)
 				data[1U] = 0x00U;
 
 				writeQueueRF(data, P25_TSDU_FRAME_LENGTH_BYTES + 2U);
+
+				// CRITICAL: Immediately flush to modem - TPT timing is critical
+				if (m_modem != nullptr) {
+					// Read from our queue and write directly to modem
+					unsigned char txData[300U];
+					unsigned int len = readModem(txData);
+					if (len > 0U) {
+						m_modem->writeP25Data(txData, len);
+						m_modem->flushP25Data();
+						LogMessage("P25, flushed TPT response directly to modem");
+					}
+				}
 			}
 			break;
 		case P25_LCF_TSBK_CALL_ALERT:

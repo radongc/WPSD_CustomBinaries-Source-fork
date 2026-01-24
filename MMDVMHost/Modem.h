@@ -101,6 +101,7 @@ public:
 	bool writeDMRData2(const unsigned char* data, unsigned int length);
 	bool writeYSFData(const unsigned char* data, unsigned int length);
 	bool writeP25Data(const unsigned char* data, unsigned int length);
+	void flushP25Data();
 	bool writeNXDNData(const unsigned char* data, unsigned int length);
 	bool writePOCSAGData(const unsigned char* data, unsigned int length);
 	bool writeFMData(const unsigned char* data, unsigned int length);

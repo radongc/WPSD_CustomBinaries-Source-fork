@@ -35,9 +35,11 @@
 
 #include <cstdio>
 
+class CModem;
+
 class CP25Control {
 public:
-	CP25Control(unsigned int nac, unsigned int id, bool selfOly, bool uidOverride, CP25Network* network, CDisplay* display, unsigned int timeout, bool duplex, CDMRLookup* lookup, bool remoteGateway, CRSSIInterpolator* rssiMapper);
+	CP25Control(unsigned int nac, unsigned int id, bool selfOly, bool uidOverride, CP25Network* network, CDisplay* display, unsigned int timeout, bool duplex, CDMRLookup* lookup, bool remoteGateway, CRSSIInterpolator* rssiMapper, CModem* modem);
 	~CP25Control();
 
 	bool writeModem(unsigned char* data, unsigned int len);
@@ -51,6 +53,7 @@ public:
 	void enable(bool enabled);
 
 private:
+	CModem*                    m_modem;
 	unsigned int               m_nac;
 	unsigned int               m_id;
 	bool                       m_selfOnly;

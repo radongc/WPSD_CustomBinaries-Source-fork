@@ -798,16 +798,9 @@ void CP25Control::clock(unsigned int ms)
 	// Pre-emptive idle transmission for Talk Permit Tone support
 	// When the channel is idle, periodically transmit a TSDU so the radio
 	// knows the repeater is active and ready to accept transmissions
-	// NOTE: Only works in duplex mode
-	if (!m_duplex) {
-		// Simplex mode - idle transmission disabled
-	} else if (m_rfState != RPT_RF_STATE::LISTENING || m_netState != RPT_NET_STATE::IDLE) {
-		// Not idle - stop timer
-		m_idleTimer.stop();
-	} else {
+	if (m_duplex && m_rfState == RPT_RF_STATE::LISTENING && m_netState == RPT_NET_STATE::IDLE) {
 		if (!m_idleTimer.isRunning()) {
 			m_idleTimer.start();
-			LogMessage("P25, started idle timer for TPT");
 		} else if (m_idleTimer.hasExpired()) {
 			// Send an idle TSDU
 			unsigned char data[P25_TSDU_FRAME_LENGTH_BYTES + 2U];
@@ -836,10 +829,11 @@ void CP25Control::clock(unsigned int ms)
 
 			writeQueueRF(data, P25_TSDU_FRAME_LENGTH_BYTES + 2U);
 
-			LogMessage("P25, sent idle TSDU for TPT pre-emption");
-
 			m_idleTimer.start();
 		}
+	} else {
+		// Stop idle timer when not idle
+		m_idleTimer.stop();
 	}
 
 	if (m_netState == RPT_NET_STATE::AUDIO) {

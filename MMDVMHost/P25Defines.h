@@ -58,7 +58,8 @@ const unsigned int  P25_MI_LENGTH_BYTES = 9U;
 const unsigned char P25_ALGO_UNENCRYPT = 0x80U;
 
 const unsigned char P25_LCF_GROUP           = 0x00U;
-const unsigned char P25_LCF_GRP_VCH_GRANT   = 0x02U;
+const unsigned char P25_LCF_GRP_VCH_GRANT   = 0x00U;  // TSBK opcode $00 - Group Voice Channel Grant (for talk-permit)
+const unsigned char P25_LCF_GRP_VCH_GRANT_UPDT = 0x02U;  // TSBK opcode $02 - Group Voice Channel Grant Update
 const unsigned char P25_LCF_PRIVATE         = 0x03U;
 
 const unsigned char P25_LCF_TSBK_CALL_ALERT  = 0x1FU;

@@ -426,22 +426,15 @@ void CP25Data::encodeTSDU(unsigned char* data)
 
     switch (m_lcf) {
 	    case P25_LCF_GRP_VCH_GRANT:
-		// Group Voice Channel Grant - format: ServiceOptions(8) + Channel(16) + GroupAddr(16) + SourceAddr(24) = 64 bits
+		// Group Voice Channel Grant (TSBK opcode $00) - format: ServiceOptions(8) + Channel(16) + GroupAddr(16) + SourceAddr(24) = 64 bits
+		// This is the proper grant message that triggers talk-permit tone on Motorola radios (APX, XTS, etc.)
 		// For conventional P25, channel identifier/number is 0 (no trunking)
 		tsbkValue = (unsigned long long)(m_serviceType & 0xFFU);    // Service Options (8 bits)
 		tsbkValue = (tsbkValue << 16) + 0U;                         // Channel ID/Number (16 bits) - 0 for conventional
 		tsbkValue = (tsbkValue << 16) + (m_dstId & 0xFFFFU);        // Group Address (16 bits)
 		tsbkValue = (tsbkValue << 24) + (m_srcId & 0xFFFFFFU);      // Source Radio Address (24 bits)
 		break;
-	    case P25_LCF_GROUP:
-		// Group Voice Channel User - format: Options(24) + GroupAddr(16) + SourceAddr(24) = 64 bits
-		// Bits 63-40: Service Options/Reserved (bit 63 = emergency)
-		// Bits 39-24: Group Address (16 bits)
-		// Bits 23-0: Source Address (24 bits)
-		tsbkValue = m_emergency ? 0x800000ULL : 0x000000ULL;        // Emergency flag in bit 63 + reserved (24 bits total)
-		tsbkValue = (tsbkValue << 16) + (m_dstId & 0xFFFFU);        // Group Address (16 bits)
-		tsbkValue = (tsbkValue << 24) + (m_srcId & 0xFFFFFFU);      // Source Radio Address (24 bits)
-		break;
+	    // Note: P25_LCF_GROUP (Group Voice Channel User) is not encoded here - it's only decoded from incoming radio transmissions
 	    case P25_LCF_TSBK_CALL_ALERT:
 		tsbkValue = 0U;
 		tsbkValue = (tsbkValue << 16) + 0U;

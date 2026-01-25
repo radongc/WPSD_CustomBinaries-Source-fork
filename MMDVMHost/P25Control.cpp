@@ -507,6 +507,42 @@ bool CP25Control::writeModem(unsigned char* data, unsigned int len)
 				writeQueueRF(data, P25_TSDU_FRAME_LENGTH_BYTES + 2U);
 			}
 			break;
+		case P25_LCF_TSBK_U_REG_REQ: {
+			// Handle Unit Registration Request - respond with Unit Registration Response (accept)
+			LogMessage("P25, received RF TSDU transmission, UNIT REG REQ from %s (SysId: $%03X)", source.c_str(), m_rfData.getSysId());
+			::memset(data + 2U, 0x00U, P25_TSDU_FRAME_LENGTH_BYTES);
+
+			// Regenerate Sync
+			CSync::addP25Sync(data + 2U);
+
+			// Regenerate NID
+			m_nid.encode(data + 2U, P25_DUID_TSDU);
+
+			// Build a Unit Registration Response
+			unsigned char originalLcf = m_rfData.getLCF();
+			m_rfData.setLCF(P25_LCF_TSBK_U_REG_RSP);
+			m_rfData.setServiceType(0x00U);  // Response code: 0x00 = accept registration
+
+			// Encode TSDU with Registration Response
+			m_rfData.encodeTSDU(data + 2U);
+
+			// Restore original LCF
+			m_rfData.setLCF(originalLcf);
+
+			// Add busy bits - outbound
+			addBusyBits(data + 2U, P25_TSDU_FRAME_LENGTH_BITS, true, false);
+
+			// Set first busy bits to 1,0 (outbound)
+			setBusyBits(data + 2U, P25_SS0_START, true, false);
+
+			if (m_duplex) {
+				data[0U] = TAG_DATA;
+				data[1U] = 0x00U;
+
+				writeQueueRF(data, P25_TSDU_FRAME_LENGTH_BYTES + 2U);
+			}
+			break;
+		}
 		default:
 			LogMessage("P25, recieved RF TSDU transmission, unhandled LCF $%02X", m_rfData.getLCF());
 			break;

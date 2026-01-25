@@ -44,6 +44,8 @@ m_lcf(0x00U),
 m_emergency(false),
 m_srcId(0U),
 m_dstId(0U),
+m_serviceType(0U),
+m_sysId(0U),
 m_rs(),
 m_trellis()
 {
@@ -403,6 +405,15 @@ bool CP25Data::decodeTSDU(const unsigned char* data)
 		m_dstId = (unsigned int)((tsbkValue >> 24) & 0xFFFFFFU);    // Target Radio Address
 		m_srcId = (unsigned int)(tsbkValue & 0xFFFFFFU);            // Source Radio Address
 		break;
+	    case P25_LCF_TSBK_U_REG_REQ:
+		// Unit Registration Request - format per TIA-102.AABD:
+		// Bits 63-52: Reserved (12 bits)
+		// Bits 51-40: System ID (12 bits)
+		// Bits 39-24: Reserved/WACN (16 bits)
+		// Bits 23-0: Source Address (24 bits) - the radio requesting registration
+		m_sysId = (unsigned int)((tsbkValue >> 40) & 0xFFFU);       // System ID (12 bits)
+		m_srcId = (unsigned int)(tsbkValue & 0xFFFFFFU);            // Source Radio Address (24 bits)
+		break;
 	    default:
 		LogMessage("P25, unknown LCF value in TSDU - $%02X", m_lcf);
 		break;
@@ -447,6 +458,20 @@ void CP25Data::encodeTSDU(unsigned char* data)
 		tsbkValue = (tsbkValue << 16) + (m_serviceType & 0xFF);     // Service Type
 		tsbkValue = (tsbkValue << 32) + m_dstId;                    // Target Radio Address
 		tsbkValue = (tsbkValue << 24) + m_srcId;                    // Source Radio Address
+		break;
+	    case P25_LCF_TSBK_U_REG_RSP:
+		// Unit Registration Response - format per TIA-102.AABD:
+		// Bits 63-56: Response Code (8 bits) - 0x00 = accept
+		// Bits 55-44: Reserved (12 bits)
+		// Bits 43-40: System ID upper (4 bits)
+		// Bits 39-32: System ID lower (8 bits) - total 12 bits for System ID
+		// Bits 31-24: Reserved (8 bits)
+		// Bits 23-0: Source Address (24 bits) - radio ID being registered
+		tsbkValue = (unsigned long long)(m_serviceType & 0xFFU);    // Response Code (8 bits) - 0x00 = accept
+		tsbkValue = (tsbkValue << 12) + 0U;                         // Reserved (12 bits)
+		tsbkValue = (tsbkValue << 12) + (m_sysId & 0xFFFU);         // System ID (12 bits)
+		tsbkValue = (tsbkValue << 8) + 0U;                          // Reserved (8 bits)
+		tsbkValue = (tsbkValue << 24) + (m_srcId & 0xFFFFFFU);      // Source Address (24 bits)
 		break;
 	    default:
 		LogMessage("P25, unknown LCF value in TSDU - $%02X", m_lcf);
@@ -570,6 +595,16 @@ unsigned char CP25Data::getServiceType() const
     return m_serviceType;
 }
 
+void CP25Data::setSysId(unsigned int id)
+{
+    m_sysId = id;
+}
+
+unsigned int CP25Data::getSysId() const
+{
+    return m_sysId;
+}
+
 void CP25Data::reset()
 {
 	::memset(m_mi, 0x00U, P25_MI_LENGTH_BYTES);
@@ -580,6 +615,8 @@ void CP25Data::reset()
 	m_mfId  = 0x00U;
 	m_srcId = 0U;
 	m_dstId = 0U;
+	m_sysId = 0U;
+	m_serviceType = 0U;
 	m_emergency = false;
 }
 

@@ -65,6 +65,10 @@ const unsigned char P25_LCF_PRIVATE         = 0x03U;
 const unsigned char P25_LCF_TSBK_CALL_ALERT  = 0x1FU;
 const unsigned char P25_LCF_TSBK_ACK_RSP_FNE = 0x20U;
 
+// Unit Registration opcodes (ISP = Inbound from subscriber, OSP = Outbound to subscriber)
+const unsigned char P25_LCF_TSBK_U_REG_REQ   = 0x28U;  // ISP $28 - Unit Registration Request
+const unsigned char P25_LCF_TSBK_U_REG_RSP   = 0x2CU;  // OSP $2C - Unit Registration Response
+
 const unsigned int  P25_SS0_START    = 70U;
 const unsigned int  P25_SS1_START    = 71U;
 const unsigned int  P25_INCREMENT = 72U;

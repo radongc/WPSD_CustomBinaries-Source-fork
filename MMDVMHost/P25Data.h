@@ -69,6 +69,9 @@ public:
 	void setServiceType(unsigned char type);
 	unsigned char getServiceType() const;
 
+	void setSysId(unsigned int id);
+	unsigned int getSysId() const;
+
 	void reset();
 
 private:
@@ -81,6 +84,7 @@ private:
 	unsigned int   m_srcId;
 	unsigned int   m_dstId;
 	unsigned char  m_serviceType;
+	unsigned int   m_sysId;
 	CRS634717      m_rs;
 	CP25Trellis    m_trellis;
 

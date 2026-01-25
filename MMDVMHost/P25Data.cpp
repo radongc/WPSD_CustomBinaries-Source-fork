@@ -384,11 +384,6 @@ bool CP25Data::decodeTSDU(const unsigned char* data)
     tsbkValue = (tsbkValue << 8) + tsbk[8U];
     tsbkValue = (tsbkValue << 8) + tsbk[9U];
 
-    // Debug: dump raw TSBK data
-    LogDebug("P25, TSBK raw: LCF=$%02X MFID=$%02X Data=%02X %02X %02X %02X %02X %02X %02X %02X",
-             m_lcf, m_mfId, tsbk[2U], tsbk[3U], tsbk[4U], tsbk[5U], tsbk[6U], tsbk[7U], tsbk[8U], tsbk[9U]);
-    LogDebug("P25, TSBK value: $%016llX", tsbkValue);
-
     switch (m_lcf) {
 	    case P25_LCF_GROUP:
 		// Group Voice Channel User - format: Options(24) + GroupAddr(16) + SourceAddr(24) = 64 bits
@@ -398,7 +393,6 @@ bool CP25Data::decodeTSDU(const unsigned char* data)
 		m_emergency = ((tsbkValue >> 63) & 0x01U) == 0x01U;         // Emergency flag (bit 63)
 		m_dstId = (unsigned int)((tsbkValue >> 24) & 0xFFFFU);      // Group Address (16 bits)
 		m_srcId = (unsigned int)(tsbkValue & 0xFFFFFFU);            // Source Radio Address (24 bits)
-		LogDebug("P25, TSBK GROUP decoded: srcId=%u dstId=%u emergency=%d", m_srcId, m_dstId, m_emergency ? 1 : 0);
 		break;
 	    case P25_LCF_TSBK_CALL_ALERT:
 		m_dstId = (unsigned int)((tsbkValue >> 24) & 0xFFFFFFU);    // Target Radio Address

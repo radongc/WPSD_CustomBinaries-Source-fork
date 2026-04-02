@@ -180,27 +180,23 @@ unsigned int CP25SABridge::getPendingPDU(unsigned char* pdu, CP25NID& nid)
 		return 0U;
 	}
 
-	// --- PDU Header: XG-100P SAP 32 format, with APX source RID ---
+	// --- Echo test: exact XG-100P SAP 32 PDU, completely unchanged ---
+	// Header and data block are verbatim from XG-100P capture.
+	// All CRCs (header CRC + data block CRC-9) remain valid.
 	unsigned char header[P25_PDU_HEADER_LENGTH_BYTES];
 	header[0U]  = 0x56U;
-	header[1U]  = 0xE0U;                                    // SAP 32 with upper flags
-	header[2U]  = 0x00U;                                    // MFId
-	header[3U]  = (m_gpsSrcId >> 16) & 0xFFU;
-	header[4U]  = (m_gpsSrcId >> 8)  & 0xFFU;
-	header[5U]  = m_gpsSrcId & 0xFFU;
-	header[6U]  = 0x81U;                                    // 1 block + full message flag
+	header[1U]  = 0xE0U;
+	header[2U]  = 0x00U;
+	header[3U]  = 0x1DU;                                    // LLId = 1933782 (XG-100P RID)
+	header[4U]  = 0x81U;
+	header[5U]  = 0xD6U;
+	header[6U]  = 0x81U;
 	header[7U]  = 0x00U;
 	header[8U]  = 0x88U;
 	header[9U]  = 0x00U;
-	header[10U] = 0x00U;
-	header[11U] = 0x00U;
+	header[10U] = 0xA2U;                                    // Original header CRC
+	header[11U] = 0x70U;
 
-	CCRC::addCCITT162(header, P25_PDU_HEADER_LENGTH_BYTES);
-
-	// --- Data block: XG-100P payload template (confirmed, 18 bytes) ---
-	// Bytes 0-15 are serial/fragment + LRRP payload from XG-100P capture.
-	// Bytes 16-17 are CRC-CCITT-16 covering header[0-9] + dataBlock[0-15],
-	// recomputed for our header since we changed the LLId.
 	unsigned char dataBlock[P25_PDU_CONFIRMED_LENGTH_BYTES];
 	dataBlock[0U]  = 0xBFU;
 	dataBlock[1U]  = 0x42U;
@@ -218,18 +214,8 @@ unsigned int CP25SABridge::getPendingPDU(unsigned char* pdu, CP25NID& nid)
 	dataBlock[13U] = 0x8DU;
 	dataBlock[14U] = 0x78U;
 	dataBlock[15U] = 0x2DU;
-	dataBlock[16U] = 0x00U;
-	dataBlock[17U] = 0x00U;
-
-	// Recompute confirmed data block CRC over header fields + data block payload
-	unsigned char crcBuf[28U];
-	::memcpy(crcBuf, header, 10U);
-	::memcpy(crcBuf + 10U, dataBlock, 16U);
-	crcBuf[26U] = 0x00U;
-	crcBuf[27U] = 0x00U;
-	CCRC::addCCITT162(crcBuf, 28U);
-	dataBlock[16U] = crcBuf[26U];
-	dataBlock[17U] = crcBuf[27U];
+	dataBlock[16U] = 0xE9U;                                 // Original data block CRC
+	dataBlock[17U] = 0x09U;
 
 	CUtils::dump(2U, "P25 SA Bridge, TX PDU header", header, P25_PDU_HEADER_LENGTH_BYTES);
 	CUtils::dump(2U, "P25 SA Bridge, TX PDU data block", dataBlock, P25_PDU_CONFIRMED_LENGTH_BYTES);

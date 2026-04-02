@@ -146,14 +146,8 @@ void CP25SABridge::logPDUDataBlock(unsigned int sap, const unsigned char* dataBl
 void CP25SABridge::onVoiceEnd()
 {
 	if (m_gpsValid) {
-		if (!m_templateValid) {
-			LogMessage("P25 SA Bridge, voice ended from RID %u with GPS but no SAP 31 template captured yet",
-				m_gpsSrcId);
-			return;
-		}
-
 		LogMessage("P25 SA Bridge, voice ended from RID %u with GPS lat=%.6f lon=%.6f, "
-			"scheduling SAP 31 PDU replay in %ums",
+			"scheduling HARDCODED SAP 31 PDU in %ums",
 			m_gpsSrcId, m_gpsLatitude, m_gpsLongitude, m_delayMs);
 		m_pendingTransmit = true;
 		m_delayTimer.start();
@@ -172,43 +166,42 @@ bool CP25SABridge::hasPendingPDU()
 
 unsigned int CP25SABridge::getPendingPDU(unsigned char* pdu, CP25NID& nid)
 {
-	if (!m_gpsValid || !m_templateValid || m_templateBlockCount == 0U) {
+	if (!m_gpsValid) {
 		reset();
 		return 0U;
 	}
 
-	unsigned char txHeader[P25_PDU_HEADER_LENGTH_BYTES];
-	::memcpy(txHeader, m_templateHeader, P25_PDU_HEADER_LENGTH_BYTES);
+	const unsigned char hdr[] = {
+		0x35U, 0xDFU, 0xA4U, 0xFFU, 0xFFU, 0xFFU, 0x89U, 0x09U, 0x00U, 0x00U, 0x29U, 0xEEU
+	};
+	const unsigned char blk0[] = {
+		0x85U, 0x5DU, 0xDBU, 0x5DU, 0xB8U, 0xAFU, 0xADU, 0xB6U, 0xAFU, 0x10U, 0xC5U, 0x7FU,
+		0x6DU, 0xAAU, 0xDBU, 0x0DU, 0x93U, 0x09U
+	};
+	const unsigned char blk1[] = {
+		0x2DU, 0x53U, 0x1BU, 0x6BU, 0x42U, 0xBBU, 0x6DU, 0xB6U, 0xDBU, 0x6DU, 0xB6U, 0xDBU,
+		0x6DU, 0xB0U, 0xDBU, 0x6DU, 0xB6U, 0xDBU
+	};
+	const unsigned char blkPad[] = {
+		0x6DU, 0xB6U, 0xDBU, 0x6DU, 0xB6U, 0xDBU, 0x6DU, 0xB6U, 0xDBU, 0x6DU, 0xB6U, 0xDBU,
+		0x6DU, 0xB6U, 0xDBU, 0x6DU, 0xB6U, 0xDBU
+	};
 
-	txHeader[3U] = (unsigned char)((m_gpsSrcId >> 16) & 0xFFU);
-	txHeader[4U] = (unsigned char)((m_gpsSrcId >> 8)  & 0xFFU);
-	txHeader[5U] = (unsigned char)((m_gpsSrcId >> 0)  & 0xFFU);
-
-	CCRC::addCCITT162(txHeader, P25_PDU_HEADER_LENGTH_BYTES);
-
-	CUtils::dump(2U, "P25 SA Bridge, TX SAP 31 header (LLId patched)", txHeader, P25_PDU_HEADER_LENGTH_BYTES);
-
-	unsigned int totalFECBlocks = 1U + m_templateBlockCount;
+	const unsigned int blockCount = 9U;
+	const unsigned int totalFECBlocks = 1U + blockCount;
 	const unsigned int headerOffset = P25_SYNC_LENGTH_BYTES + P25_NID_LENGTH_BYTES;
 	const unsigned int totalRawBits = P25_SYNC_LENGTH_BITS + P25_NID_LENGTH_BITS
 	                                + totalFECBlocks * P25_PDU_FEC_LENGTH_BITS;
-	unsigned int totalRawBytes = totalRawBits / 8U;
-	if ((totalRawBits % 8U) > 0U)
-		totalRawBytes++;
 
 	unsigned char rawPDU[300U];
 	::memset(rawPDU, 0x00U, 300U);
 
 	CP25Trellis trellis;
-	trellis.encode12(txHeader, rawPDU + headerOffset);
-
-	for (unsigned int i = 0U; i < m_templateBlockCount; i++) {
-		unsigned int blockOffset = headerOffset + (i + 1U) * P25_PDU_FEC_LENGTH_BYTES;
-		if (m_templateBlockConfirmed[i])
-			trellis.encode34(m_templateBlocks[i], rawPDU + blockOffset);
-		else
-			trellis.encode12(m_templateBlocks[i], rawPDU + blockOffset);
-	}
+	trellis.encode12(hdr, rawPDU + headerOffset);
+	trellis.encode34(blk0, rawPDU + headerOffset + 1U * P25_PDU_FEC_LENGTH_BYTES);
+	trellis.encode34(blk1, rawPDU + headerOffset + 2U * P25_PDU_FEC_LENGTH_BYTES);
+	for (unsigned int i = 2U; i < blockCount; i++)
+		trellis.encode34(blkPad, rawPDU + headerOffset + (i + 1U) * P25_PDU_FEC_LENGTH_BYTES);
 
 	::memset(pdu, 0x00U, 512U);
 
@@ -223,8 +216,8 @@ unsigned int CP25SABridge::getPendingPDU(unsigned char* pdu, CP25NID& nid)
 	pdu[0U] = TAG_HEADER;
 	pdu[1U] = 0x00U;
 
-	LogMessage("P25 SA Bridge, transmitting SAP 31 PDU replay for RID %u: lat=%.6f lon=%.6f (%u frame bytes, %u blocks)",
-		m_gpsSrcId, m_gpsLatitude, m_gpsLongitude, newByteLength, m_templateBlockCount);
+	LogMessage("P25 SA Bridge, transmitting HARDCODED SAP 31 PDU (%u frame bytes, %u blocks)",
+		newByteLength, blockCount);
 
 	m_pendingTransmit = false;
 	m_gpsValid = false;

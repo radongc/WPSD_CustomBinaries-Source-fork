@@ -49,7 +49,8 @@ m_gpsSrcId(0U),
 m_gpsLatitude(0.0),
 m_gpsLongitude(0.0),
 m_pendingTransmit(false),
-m_delayTimer(1000U, 0U, delayMs)
+m_delayTimer(1000U, 0U, delayMs),
+m_lastPDUHeaderValid(false)
 {
 }
 
@@ -107,12 +108,48 @@ void CP25SABridge::logPDU(unsigned int sap, unsigned int llId, unsigned int bloc
 {
 	LogMessage("P25 SA Bridge, captured SAP %u PDU header from LLId %u, %u blocks:", sap, llId, blockCount);
 	CUtils::dump(2U, "P25 SA Bridge, PDU Header bytes", header, headerLen);
+
+	::memset(m_lastPDUHeader, 0x00U, 12U);
+	if (headerLen <= 12U)
+		::memcpy(m_lastPDUHeader, header, headerLen);
+	m_lastPDUHeaderValid = true;
 }
 
 void CP25SABridge::logPDUDataBlock(unsigned int sap, const unsigned char* dataBlock, unsigned int blockLen, unsigned int blockIndex)
 {
 	LogMessage("P25 SA Bridge, captured SAP %u data block %u (%u bytes):", sap, blockIndex, blockLen);
 	CUtils::dump(2U, "P25 SA Bridge, PDU Data Block bytes", dataBlock, blockLen);
+
+	if (m_lastPDUHeaderValid && blockLen == 18U && blockIndex == 0U) {
+		unsigned char crcA[28U];
+		::memcpy(crcA, m_lastPDUHeader, 10U);
+		::memcpy(crcA + 10U, dataBlock, 16U);
+		crcA[26U] = 0x00U;
+		crcA[27U] = 0x00U;
+		CCRC::addCCITT162(crcA, 28U);
+
+		unsigned char crcB[30U];
+		::memcpy(crcB, m_lastPDUHeader, 12U);
+		::memcpy(crcB + 12U, dataBlock, 16U);
+		crcB[28U] = 0x00U;
+		crcB[29U] = 0x00U;
+		CCRC::addCCITT162(crcB, 30U);
+
+		unsigned char crcC[18U];
+		::memcpy(crcC, dataBlock, 16U);
+		crcC[16U] = 0x00U;
+		crcC[17U] = 0x00U;
+		CCRC::addCCITT162(crcC, 18U);
+
+		LogMessage("P25 SA Bridge, CRC verify block 0: actual=%02X %02X, "
+			"hdr[0-9]+blk=%02X %02X, hdr[0-11]+blk=%02X %02X, blk-only=%02X %02X",
+			dataBlock[16U], dataBlock[17U],
+			crcA[26U], crcA[27U],
+			crcB[28U], crcB[29U],
+			crcC[16U], crcC[17U]);
+
+		m_lastPDUHeaderValid = false;
+	}
 }
 
 void CP25SABridge::onVoiceEnd()
@@ -143,14 +180,14 @@ unsigned int CP25SABridge::getPendingPDU(unsigned char* pdu, CP25NID& nid)
 		return 0U;
 	}
 
-	// --- PDU Header: XG-100P SAP 32 format, LLId = broadcast (SA_ADDRESS) ---
+	// --- PDU Header: XG-100P SAP 32 format, with APX source RID ---
 	unsigned char header[P25_PDU_HEADER_LENGTH_BYTES];
 	header[0U]  = 0x56U;
 	header[1U]  = 0xE0U;                                    // SAP 32 with upper flags
 	header[2U]  = 0x00U;                                    // MFId
-	header[3U]  = 0xFFU;                                    // LLId = 0xFFFFFF (broadcast)
-	header[4U]  = 0xFFU;
-	header[5U]  = 0xFFU;
+	header[3U]  = (m_gpsSrcId >> 16) & 0xFFU;
+	header[4U]  = (m_gpsSrcId >> 8)  & 0xFFU;
+	header[5U]  = m_gpsSrcId & 0xFFU;
 	header[6U]  = 0x81U;                                    // 1 block + full message flag
 	header[7U]  = 0x00U;
 	header[8U]  = 0x88U;

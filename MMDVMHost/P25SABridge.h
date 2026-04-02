@@ -51,6 +51,9 @@ private:
 
 	bool         m_pendingTransmit;
 	CTimer       m_delayTimer;
+
+	unsigned char m_lastPDUHeader[12U];
+	bool          m_lastPDUHeaderValid;
 };
 
 #endif

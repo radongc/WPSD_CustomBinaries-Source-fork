@@ -879,6 +879,15 @@ void CP25Control::clock(unsigned int ms)
 			if (len > 0U) {
 				addBusyBits(pdu + 2U, (len - 2U) * 8U, true, false);
 				writeQueueRF(pdu, len);
+
+				unsigned char eot[P25_TERM_FRAME_LENGTH_BYTES + 2U];
+				::memset(eot, 0x00U, P25_TERM_FRAME_LENGTH_BYTES + 2U);
+				eot[0U] = TAG_EOT;
+				eot[1U] = 0x00U;
+				CSync::addP25Sync(eot + 2U);
+				m_nid.encode(eot + 2U, P25_DUID_TERM);
+				addBusyBits(eot + 2U, P25_TERM_FRAME_LENGTH_BITS, true, false);
+				writeQueueRF(eot, P25_TERM_FRAME_LENGTH_BYTES + 2U);
 			}
 		}
 	}

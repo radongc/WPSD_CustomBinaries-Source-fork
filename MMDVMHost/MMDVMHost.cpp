@@ -982,20 +982,20 @@ int CMMDVMHost::run()
 		}
 
 		if (m_p25 != nullptr && m_p25Enabled) {
-			ret = m_modem->hasP25Space();
-			if (ret) {
+			while (m_modem->hasP25Space()) {
 				len = m_p25->readModem(data);
-				if (len > 0U) {
-					if (m_mode == MODE_IDLE) {
-						m_modeTimer.setTimeout(m_p25NetModeHang);
-						setMode(MODE_P25);
-					}
-					if (m_mode == MODE_P25) {
-						m_modem->writeP25Data(data, len);
-						m_modeTimer.start();
-					} else if (m_mode != MODE_LOCKOUT) {
-						LogWarning("P25 data received when in mode %u", m_mode);
-					}
+				if (len == 0U)
+					break;
+				if (m_mode == MODE_IDLE) {
+					m_modeTimer.setTimeout(m_p25NetModeHang);
+					setMode(MODE_P25);
+				}
+				if (m_mode == MODE_P25) {
+					m_modem->writeP25Data(data, len);
+					m_modeTimer.start();
+				} else if (m_mode != MODE_LOCKOUT) {
+					LogWarning("P25 data received when in mode %u", m_mode);
+					break;
 				}
 			}
 		}

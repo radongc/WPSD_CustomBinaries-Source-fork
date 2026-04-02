@@ -941,7 +941,7 @@ void CModem::clock(unsigned int ms)
 		m_ysfSpace--;
 	}
 
-	if (m_p25Space > 1U && !m_txP25Data.isEmpty()) {
+	while (m_p25Space > 0U && !m_txP25Data.isEmpty()) {
 		unsigned char len = 0U;
 		m_txP25Data.getData(&len, 1U);
 		m_txP25Data.getData(m_buffer, len);

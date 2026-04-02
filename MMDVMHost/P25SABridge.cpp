@@ -238,6 +238,16 @@ unsigned int CP25SABridge::getPendingPDU(unsigned char* pdu, CP25NID& nid, unsig
 
 	CUtils::dump(2U, "P25 SA Bridge, TX header (decoded)", header, P25_PDU_HEADER_LENGTH_BYTES);
 
+	for (unsigned int i = 0U; i < txBlocks && i < 3U; i++) {
+		unsigned char blockData[P25_PDU_CONFIRMED_LENGTH_BYTES];
+		unsigned int blockOffset = headerOffset + P25_PDU_FEC_LENGTH_BYTES + i * P25_PDU_FEC_LENGTH_BYTES;
+		bool blockValid = trellis.decode34(m_rawPDU + blockOffset, blockData);
+		if (blockValid)
+			CUtils::dump(2U, "P25 SA Bridge, TX data block (real)", blockData, P25_PDU_CONFIRMED_LENGTH_BYTES);
+		else
+			LogMessage("P25 SA Bridge, TX data block %u trellis decode FAILED", i);
+	}
+
 	unsigned char densePDU[300U];
 	::memset(densePDU, 0x00U, 300U);
 

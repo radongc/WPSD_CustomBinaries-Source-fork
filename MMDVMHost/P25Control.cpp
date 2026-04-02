@@ -38,7 +38,7 @@ const unsigned char BIT_MASK_TABLE[] = {0x80U, 0x40U, 0x20U, 0x10U, 0x08U, 0x04U
 #define WRITE_BIT(p,i,b) p[(i)>>3] = (b) ? (p[(i)>>3] | BIT_MASK_TABLE[(i)&7]) : (p[(i)>>3] & ~BIT_MASK_TABLE[(i)&7])
 #define READ_BIT(p,i)    (p[(i)>>3] & BIT_MASK_TABLE[(i)&7])
 
-CP25Control::CP25Control(unsigned int nac, unsigned int id, bool selfOnly, bool uidOverride, CP25Network* network, CDisplay* display, unsigned int timeout, bool duplex, CDMRLookup* lookup, bool remoteGateway, CRSSIInterpolator* rssiMapper) :
+CP25Control::CP25Control(unsigned int nac, unsigned int id, bool selfOnly, bool uidOverride, CP25Network* network, CDisplay* display, unsigned int timeout, bool duplex, CDMRLookup* lookup, bool remoteGateway, CRSSIInterpolator* rssiMapper, bool saBridgeEnabled, unsigned int saBridgeDelayMs) :
 m_nac(nac),
 m_id(id),
 m_selfOnly(selfOnly),
@@ -84,6 +84,7 @@ m_minRSSI(0U),
 m_aveRSSI(0U),
 m_rssiCount(0U),
 m_enabled(true),
+m_saBridge(nullptr),
 m_fp(nullptr)
 {
 	assert(display != nullptr);
@@ -104,6 +105,11 @@ m_fp(nullptr)
 
 	m_rfPDU = new unsigned char[P25_MAX_PDU_COUNT * P25_LDU_FRAME_LENGTH_BYTES + 2U];
 	::memset(m_rfPDU, 0x00U, P25_MAX_PDU_COUNT * P25_LDU_FRAME_LENGTH_BYTES + 2U);
+
+	if (saBridgeEnabled) {
+		m_saBridge = new CP25SABridge(saBridgeDelayMs);
+		LogInfo("    P25 SA Bridge enabled, delay %ums", saBridgeDelayMs);
+	}
 }
 
 CP25Control::~CP25Control()
@@ -113,6 +119,7 @@ CP25Control::~CP25Control()
 	delete[] m_lastIMBE;
 	delete[] m_rfLDU;
 	delete[] m_rfPDU;
+	delete m_saBridge;
 }
 
 bool CP25Control::writeModem(unsigned char* data, unsigned int len)
@@ -135,6 +142,9 @@ bool CP25Control::writeModem(unsigned char* data, unsigned int len)
 			LogMessage("P25, transmission lost from %s to %s%u, %.1f seconds, BER: %.1f%%", source.c_str(), grp ? "TG " : "", dstId, float(m_rfFrames) / 5.56F, float(m_rfErrs * 100U) / float(m_rfBits));
 
 		// LogMessage("P25, total frames: %d, bits: %d, undecodable LC: %d, errors: %d, BER: %.4f%%", m_rfFrames, m_rfBits, m_rfUndecodableLC, m_rfErrs, float(m_rfErrs * 100U) / float(m_rfBits));
+
+		if (m_saBridge != nullptr)
+			m_saBridge->onVoiceEnd();
 
 		if (m_netState == RPT_NET_STATE::IDLE)
 			m_display->clearP25();
@@ -299,6 +309,12 @@ bool CP25Control::writeModem(unsigned char* data, unsigned int len)
 				m_rfLastLDU1 = m_rfData;
 			}
 */
+			if (m_saBridge != nullptr) {
+				unsigned char lcRS[18U];
+				if (m_rfData.decodeLDU1Raw(data + 2U, lcRS))
+					m_saBridge->processVoiceLC(lcRS, m_rfData.getSrcId());
+			}
+
 			// Regenerate Sync
 			CSync::addP25Sync(data + 2U);
 
@@ -516,6 +532,9 @@ bool CP25Control::writeModem(unsigned char* data, unsigned int len)
 		return true;
 	} else if (duid == P25_DUID_TERM || duid == P25_DUID_TERM_LC) {
 		if (m_rfState == RPT_RF_STATE::AUDIO) {
+			if (m_saBridge != nullptr)
+				m_saBridge->onVoiceEnd();
+
 			writeNetwork(m_rfLDU, m_lastDUID, true);
 
 			::memset(data + 2U, 0x00U, P25_TERM_FRAME_LENGTH_BYTES);
@@ -613,6 +632,12 @@ bool CP25Control::writeModem(unsigned char* data, unsigned int len)
 				trellis.encode12(header, m_rfPDU + offset);
 				offset += P25_PDU_FEC_LENGTH_BITS;
 
+				unsigned int pduSap  = header[1U] & 0x3FU;
+				unsigned int pduLLId = (header[3U] << 16) + (header[4U] << 8) + header[5U];
+
+				if (m_saBridge != nullptr && pduSap == 32U)
+					m_saBridge->logSAP32PDU(pduLLId, header, P25_PDU_HEADER_LENGTH_BYTES);
+
 				// Regenerate the PDU data
 				for (unsigned int i = 0U; i < m_rfDataFrames; i++) {
 					unsigned char data[P25_PDU_CONFIRMED_LENGTH_BYTES];
@@ -620,10 +645,15 @@ bool CP25Control::writeModem(unsigned char* data, unsigned int len)
 					bool valid = trellis.decode34(m_rfPDU + offset, data);
 					if (valid) {
 						trellis.encode34(data, m_rfPDU + offset);
+						if (m_saBridge != nullptr && pduSap == 32U)
+							m_saBridge->logSAP32DataBlock(data, P25_PDU_CONFIRMED_LENGTH_BYTES, i);
 					} else {
 						valid = trellis.decode12(m_rfPDU + offset, data);
-						if (valid)
+						if (valid) {
 							trellis.encode12(data, m_rfPDU + offset);
+							if (m_saBridge != nullptr && pduSap == 32U)
+								m_saBridge->logSAP32DataBlock(data, P25_PDU_UNCONFIRMED_LENGTH_BYTES, i);
+						}
 					}
 
 					offset += P25_PDU_FEC_LENGTH_BITS;
@@ -801,6 +831,19 @@ void CP25Control::clock(unsigned int ms)
 
 	m_rfTimeout.clock(ms);
 	m_netTimeout.clock(ms);
+
+	if (m_saBridge != nullptr) {
+		m_saBridge->clock(ms);
+
+		if (m_saBridge->hasPendingPDU() && m_rfState == RPT_RF_STATE::LISTENING) {
+			unsigned char pdu[256U];
+			unsigned int len = m_saBridge->getPendingPDU(pdu, m_nid);
+			if (len > 0U) {
+				addBusyBits(pdu + 2U, (len - 2U) * 8U, true, false);
+				writeQueueRF(pdu, len);
+			}
+		}
+	}
 
 	if (m_netState == RPT_NET_STATE::AUDIO) {
 		m_networkWatchdog.clock(ms);
@@ -1304,6 +1347,9 @@ void CP25Control::enable(bool enabled)
 		m_rfState = RPT_RF_STATE::LISTENING;
 		m_rfTimeout.stop();
 		m_rfData.reset();
+
+		if (m_saBridge != nullptr)
+			m_saBridge->reset();
 
 		// Reset the networking section
 		switch(m_netState) {

@@ -22,6 +22,7 @@
 
 #include "RSSIInterpolator.h"
 #include "P25LowSpeedData.h"
+#include "P25SABridge.h"
 #include "RingBuffer.h"
 #include "P25Network.h"
 #include "DMRLookup.h"
@@ -37,7 +38,7 @@
 
 class CP25Control {
 public:
-	CP25Control(unsigned int nac, unsigned int id, bool selfOly, bool uidOverride, CP25Network* network, CDisplay* display, unsigned int timeout, bool duplex, CDMRLookup* lookup, bool remoteGateway, CRSSIInterpolator* rssiMapper);
+	CP25Control(unsigned int nac, unsigned int id, bool selfOly, bool uidOverride, CP25Network* network, CDisplay* display, unsigned int timeout, bool duplex, CDMRLookup* lookup, bool remoteGateway, CRSSIInterpolator* rssiMapper, bool saBridgeEnabled = false, unsigned int saBridgeDelayMs = 500U);
 	~CP25Control();
 
 	bool writeModem(unsigned char* data, unsigned int len);
@@ -96,6 +97,7 @@ private:
 	unsigned int               m_aveRSSI;
 	unsigned int               m_rssiCount;
 	bool                       m_enabled;
+	CP25SABridge*              m_saBridge;
 	FILE*                      m_fp;
 
 	void writeQueueRF(const unsigned char* data, unsigned int length);

@@ -161,6 +161,8 @@ public:
   bool         getP25RemoteGateway() const;
   unsigned int getP25TXHang() const;
   unsigned int getP25ModeHang() const;
+  bool         getP25SABridgeEnabled() const;
+  unsigned int getP25SABridgeDelay() const;
 
   // The NXDN section
   bool         getNXDNEnabled() const;
@@ -464,6 +466,8 @@ private:
   bool         m_p25RemoteGateway;
   unsigned int m_p25TXHang;
   unsigned int m_p25ModeHang;
+  bool         m_p25SABridgeEnabled;
+  unsigned int m_p25SABridgeDelay;
 
   bool         m_nxdnEnabled;
   unsigned int m_nxdnId;

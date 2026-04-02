@@ -874,39 +874,12 @@ void CP25Control::clock(unsigned int ms)
 		m_saBridge->clock(ms);
 
 		if (m_saBridge->hasPendingPDU() && m_rfState == RPT_RF_STATE::LISTENING) {
-			unsigned char pdu[600U];
-			unsigned int len = m_saBridge->getPendingPDU(pdu, m_nid);
+			unsigned char pdu[200U];
+			unsigned int pduBitLength = 0U;
+			unsigned int len = m_saBridge->getPendingPDU(pdu, m_nid, pduBitLength);
 			if (len > 0U) {
-				addBusyBits(pdu + 2U, (len - 2U) * 8U, true, false);
-
-				unsigned int frameLen = len - 2U;
-				const unsigned int MAX_CHUNK = P25_LDU_FRAME_LENGTH_BYTES;
-				unsigned int offset = 0U;
-				bool first = true;
-
-				while (offset < frameLen) {
-					unsigned int chunkLen = frameLen - offset;
-					if (chunkLen > MAX_CHUNK)
-						chunkLen = MAX_CHUNK;
-
-					unsigned char chunk[250U];
-					chunk[0U] = first ? TAG_HEADER : TAG_DATA;
-					chunk[1U] = 0x00U;
-					::memcpy(chunk + 2U, pdu + 2U + offset, chunkLen);
-					writeQueueRF(chunk, chunkLen + 2U);
-
-					offset += chunkLen;
-					first = false;
-				}
-
-				unsigned char eot[P25_TERM_FRAME_LENGTH_BYTES + 2U];
-				::memset(eot, 0x00U, P25_TERM_FRAME_LENGTH_BYTES + 2U);
-				eot[0U] = TAG_EOT;
-				eot[1U] = 0x00U;
-				CSync::addP25Sync(eot + 2U);
-				m_nid.encode(eot + 2U, P25_DUID_TERM);
-				addBusyBits(eot + 2U, P25_TERM_FRAME_LENGTH_BITS, true, false);
-				writeQueueRF(eot, P25_TERM_FRAME_LENGTH_BYTES + 2U);
+				addBusyBits(pdu + 2U, pduBitLength, true, false);
+				writeQueueRF(pdu, len);
 			}
 		}
 	}

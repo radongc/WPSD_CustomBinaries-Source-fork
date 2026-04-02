@@ -29,8 +29,8 @@ public:
 
 	void processVoiceLC(const unsigned char* rs, unsigned int srcId);
 
-	void logSAP32PDU(unsigned int llId, const unsigned char* header, unsigned int headerLen);
-	void logSAP32DataBlock(const unsigned char* dataBlock, unsigned int blockLen, unsigned int blockIndex);
+	void logPDU(unsigned int sap, unsigned int llId, unsigned int blockCount, const unsigned char* header, unsigned int headerLen);
+	void logPDUDataBlock(unsigned int sap, const unsigned char* dataBlock, unsigned int blockLen, unsigned int blockIndex);
 
 	void onVoiceEnd();
 

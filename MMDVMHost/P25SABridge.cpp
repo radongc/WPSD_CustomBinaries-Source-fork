@@ -70,25 +70,23 @@ void CP25SABridge::processVoiceLC(const unsigned char* rs, unsigned int srcId)
 		srcId, lcf, mfId,
 		rs[2U], rs[3U], rs[4U], rs[5U], rs[6U], rs[7U], rs[8U]);
 
-	// LC word layout (9 bytes after RS decode):
-	//   rs[0] = LCF, rs[1] = MFId, rs[2..8] = 7 bytes payload
-	//
-	// GPS encoding per TIA-102.BAHA: signed integers scaled by 360.0 / 2^25.
-	// With 24-bit fields in the 7-byte payload:
-	//   rs[2..4] = latitude  (24-bit signed, MSB-first)
-	//   rs[5..7] = longitude (24-bit signed, MSB-first)
-	//   rs[8]    = flags / accuracy
+	// Motorola APX GPS LC (LCF=$06, MFId=$90):
+	//   rs[0] = 0x06 (LCF)
+	//   rs[1] = 0x90 (MFId, Motorola)
+	//   rs[2] = flags / reserved
+	//   rs[3..5] = latitude  (24-bit signed, MSB-first, scaled by 180.0 / 2^24)
+	//   rs[6..8] = longitude (24-bit signed, MSB-first, scaled by 360.0 / 2^24)
 
-	int32_t rawLat = ((int32_t)(int8_t)rs[2U] << 16) |
-	                 ((int32_t)rs[3U] << 8) |
-	                  (int32_t)rs[4U];
+	int32_t rawLat = ((int32_t)(int8_t)rs[3U] << 16) |
+	                 ((int32_t)rs[4U] << 8) |
+	                  (int32_t)rs[5U];
 
-	int32_t rawLon = ((int32_t)(int8_t)rs[5U] << 16) |
-	                 ((int32_t)rs[6U] << 8) |
-	                  (int32_t)rs[7U];
+	int32_t rawLon = ((int32_t)(int8_t)rs[6U] << 16) |
+	                 ((int32_t)rs[7U] << 8) |
+	                  (int32_t)rs[8U];
 
-	double lat = (double)rawLat * (360.0 / 33554432.0);   // 2^25
-	double lon = (double)rawLon * (360.0 / 33554432.0);
+	double lat = (double)rawLat * (180.0 / 16777216.0);   // 180 / 2^24
+	double lon = (double)rawLon * (360.0 / 16777216.0);   // 360 / 2^24
 
 	if (lat >= -90.0 && lat <= 90.0 && lon >= -180.0 && lon <= 180.0) {
 		m_gpsValid   = true;
@@ -105,15 +103,15 @@ void CP25SABridge::processVoiceLC(const unsigned char* rs, unsigned int srcId)
 	}
 }
 
-void CP25SABridge::logSAP32PDU(unsigned int llId, const unsigned char* header, unsigned int headerLen)
+void CP25SABridge::logPDU(unsigned int sap, unsigned int llId, unsigned int blockCount, const unsigned char* header, unsigned int headerLen)
 {
-	LogMessage("P25 SA Bridge, captured SAP 32 PDU header from RID %u:", llId);
+	LogMessage("P25 SA Bridge, captured SAP %u PDU header from LLId %u, %u blocks:", sap, llId, blockCount);
 	CUtils::dump(1U, "P25 SA Bridge, PDU Header bytes", header, headerLen);
 }
 
-void CP25SABridge::logSAP32DataBlock(const unsigned char* dataBlock, unsigned int blockLen, unsigned int blockIndex)
+void CP25SABridge::logPDUDataBlock(unsigned int sap, const unsigned char* dataBlock, unsigned int blockLen, unsigned int blockIndex)
 {
-	LogMessage("P25 SA Bridge, captured SAP 32 data block %u (%u bytes):", blockIndex, blockLen);
+	LogMessage("P25 SA Bridge, captured SAP %u data block %u (%u bytes):", sap, blockIndex, blockLen);
 	CUtils::dump(1U, "P25 SA Bridge, PDU Data Block bytes", dataBlock, blockLen);
 }
 
@@ -145,7 +143,7 @@ unsigned int CP25SABridge::getPendingPDU(unsigned char* pdu, CP25NID& nid)
 		return 0U;
 	}
 
-	// LRRP uses 360.0 / 2^32 scaling for 32-bit latitude/longitude
+	// LRRP 32-bit scaling (will be refined once XG-100P template is captured)
 	int32_t lrrpLat = (int32_t)(m_gpsLatitude  * (4294967296.0 / 360.0));
 	int32_t lrrpLon = (int32_t)(m_gpsLongitude * (4294967296.0 / 360.0));
 

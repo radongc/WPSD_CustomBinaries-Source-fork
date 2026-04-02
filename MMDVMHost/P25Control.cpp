@@ -671,8 +671,10 @@ bool CP25Control::writeModem(unsigned char* data, unsigned int len)
 				unsigned int pduSap  = header[1U] & 0x3FU;
 				unsigned int pduLLId = (header[3U] << 16) + (header[4U] << 8) + header[5U];
 
-				if (m_saBridge != nullptr && pduSap == 32U)
-					m_saBridge->logSAP32PDU(pduLLId, header, P25_PDU_HEADER_LENGTH_BYTES);
+				bool logThisPDU = (m_saBridge != nullptr && (pduSap == 31U || pduSap == 32U));
+
+				if (logThisPDU)
+					m_saBridge->logPDU(pduSap, pduLLId, m_rfDataFrames, header, P25_PDU_HEADER_LENGTH_BYTES);
 
 				// Regenerate the PDU data
 				for (unsigned int i = 0U; i < m_rfDataFrames; i++) {
@@ -681,14 +683,14 @@ bool CP25Control::writeModem(unsigned char* data, unsigned int len)
 					bool valid = trellis.decode34(m_rfPDU + offset, data);
 					if (valid) {
 						trellis.encode34(data, m_rfPDU + offset);
-						if (m_saBridge != nullptr && pduSap == 32U)
-							m_saBridge->logSAP32DataBlock(data, P25_PDU_CONFIRMED_LENGTH_BYTES, i);
+						if (logThisPDU)
+							m_saBridge->logPDUDataBlock(pduSap, data, P25_PDU_CONFIRMED_LENGTH_BYTES, i);
 					} else {
 						valid = trellis.decode12(m_rfPDU + offset, data);
 						if (valid) {
 							trellis.encode12(data, m_rfPDU + offset);
-							if (m_saBridge != nullptr && pduSap == 32U)
-								m_saBridge->logSAP32DataBlock(data, P25_PDU_UNCONFIRMED_LENGTH_BYTES, i);
+							if (logThisPDU)
+								m_saBridge->logPDUDataBlock(pduSap, data, P25_PDU_UNCONFIRMED_LENGTH_BYTES, i);
 						}
 					}
 

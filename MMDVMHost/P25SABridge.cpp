@@ -143,77 +143,59 @@ unsigned int CP25SABridge::getPendingPDU(unsigned char* pdu, CP25NID& nid)
 		return 0U;
 	}
 
-	// LRRP 32-bit scaling (will be refined once XG-100P template is captured)
-	int32_t lrrpLat = (int32_t)(m_gpsLatitude  * (4294967296.0 / 360.0));
-	int32_t lrrpLon = (int32_t)(m_gpsLongitude * (4294967296.0 / 360.0));
-
-	// --- PDU Header (12 bytes before trellis FEC) ---
-	//
-	// Byte layout matches what CP25Control::writeModem parses:
-	//   header[0]     = format/flags
-	//   header[1]     = [2 bits flags][6 bits SAP]
-	//   header[2]     = MFId
-	//   header[3..5]  = LLId (source RID, 24-bit)
-	//   header[6]     = [1 bit flag][7 bits blocks-to-follow]
-	//   header[7..9]  = pad/offset/reserved
-	//   header[10..11]= CRC-CCITT-16
+	// --- PDU Header: exact XG-100P SAP 32 format, with APX source RID ---
 	unsigned char header[P25_PDU_HEADER_LENGTH_BYTES];
-	::memset(header, 0x00U, P25_PDU_HEADER_LENGTH_BYTES);
-
-	header[0U] = 0x00U;
-	header[1U] = P25_SAP_SNDCP & 0x3FU;                    // SAP 32
-	header[2U] = 0x00U;                                     // standard MFId
-	header[3U] = (m_gpsSrcId >> 16) & 0xFFU;
-	header[4U] = (m_gpsSrcId >> 8)  & 0xFFU;
-	header[5U] = m_gpsSrcId & 0xFFU;
-	header[6U] = 0x01U;                                     // 1 data block
-	header[7U] = 0x00U;
-	header[8U] = 0x00U;
-	header[9U] = 0x00U;
+	header[0U]  = 0x56U;
+	header[1U]  = 0xE0U;                                    // SAP 32 with upper flags
+	header[2U]  = 0x00U;                                    // MFId
+	header[3U]  = (m_gpsSrcId >> 16) & 0xFFU;
+	header[4U]  = (m_gpsSrcId >> 8)  & 0xFFU;
+	header[5U]  = m_gpsSrcId & 0xFFU;
+	header[6U]  = 0x81U;                                    // 1 block + full message flag
+	header[7U]  = 0x00U;
+	header[8U]  = 0x88U;
+	header[9U]  = 0x00U;
+	header[10U] = 0x00U;
+	header[11U] = 0x00U;
 
 	CCRC::addCCITT162(header, P25_PDU_HEADER_LENGTH_BYTES);
 
-	// --- Data block (12 bytes, unconfirmed / rate-1/2 trellis) ---
-	//
-	// LRRP position report payload.  Byte layout modeled on
-	// TIA-102.BAHA LRRP short position report.
-	// This will be refined once the XG-100P template is captured
-	// via logSAP32DataBlock().
-	unsigned char dataBlock[P25_PDU_UNCONFIRMED_LENGTH_BYTES];
-	::memset(dataBlock, 0x00U, P25_PDU_UNCONFIRMED_LENGTH_BYTES);
-
-	dataBlock[0U]  = 0x05U;                                 // short position report type
-	dataBlock[1U]  = 0x09U;                                 // length of following position data
-	dataBlock[2U]  = (lrrpLat >> 24) & 0xFFU;
-	dataBlock[3U]  = (lrrpLat >> 16) & 0xFFU;
-	dataBlock[4U]  = (lrrpLat >> 8)  & 0xFFU;
-	dataBlock[5U]  = lrrpLat & 0xFFU;
-	dataBlock[6U]  = (lrrpLon >> 24) & 0xFFU;
-	dataBlock[7U]  = (lrrpLon >> 16) & 0xFFU;
-	dataBlock[8U]  = (lrrpLon >> 8)  & 0xFFU;
-	dataBlock[9U]  = lrrpLon & 0xFFU;
-	dataBlock[10U] = 0x00U;
-	dataBlock[11U] = 0x00U;
+	// --- Data block: exact bytes from XG-100P capture (confirmed, 18 bytes) ---
+	unsigned char dataBlock[P25_PDU_CONFIRMED_LENGTH_BYTES];
+	dataBlock[0U]  = 0xBFU;
+	dataBlock[1U]  = 0x42U;
+	dataBlock[2U]  = 0x7DU;
+	dataBlock[3U]  = 0x5CU;
+	dataBlock[4U]  = 0xA1U;
+	dataBlock[5U]  = 0xDBU;
+	dataBlock[6U]  = 0xCDU;
+	dataBlock[7U]  = 0xF5U;
+	dataBlock[8U]  = 0x0FU;
+	dataBlock[9U]  = 0x2AU;
+	dataBlock[10U] = 0xB5U;
+	dataBlock[11U] = 0x7FU;
+	dataBlock[12U] = 0x57U;
+	dataBlock[13U] = 0x8DU;
+	dataBlock[14U] = 0x78U;
+	dataBlock[15U] = 0x2DU;
+	dataBlock[16U] = 0xE9U;
+	dataBlock[17U] = 0x09U;
 
 	CUtils::dump(2U, "P25 SA Bridge, TX PDU header", header, P25_PDU_HEADER_LENGTH_BYTES);
-	CUtils::dump(2U, "P25 SA Bridge, TX PDU data block", dataBlock, P25_PDU_UNCONFIRMED_LENGTH_BYTES);
+	CUtils::dump(2U, "P25 SA Bridge, TX PDU data block", dataBlock, P25_PDU_CONFIRMED_LENGTH_BYTES);
 
-	// --- Assemble the raw bit buffer (no SS bits yet) ---
-	//
-	//   [Sync 48 bits][NID 64 bits][Header FEC 192 bits][Data FEC 192 bits]
-	//   Total = 496 raw bits = 62 bytes.
-	//   Sync and NID regions are overwritten after SS insertion.
-	const unsigned int headerOffset    = P25_SYNC_LENGTH_BYTES + P25_NID_LENGTH_BYTES;         // 14
-	const unsigned int dataBlockOffset = headerOffset + P25_PDU_FEC_LENGTH_BYTES;              // 38
+	// [Sync 48 bits][NID 64 bits][Header FEC 192 bits][Data FEC 192 bits]
+	const unsigned int headerOffset    = P25_SYNC_LENGTH_BYTES + P25_NID_LENGTH_BYTES;
+	const unsigned int dataBlockOffset = headerOffset + P25_PDU_FEC_LENGTH_BYTES;
 	const unsigned int totalRawBits    = P25_SYNC_LENGTH_BITS + P25_NID_LENGTH_BITS
-	                                   + 2U * P25_PDU_FEC_LENGTH_BITS;                         // 496
+	                                   + 2U * P25_PDU_FEC_LENGTH_BITS;
 
 	unsigned char rawPDU[80U];
 	::memset(rawPDU, 0x00U, 80U);
 
 	CP25Trellis trellis;
 	trellis.encode12(header, rawPDU + headerOffset);
-	trellis.encode12(dataBlock, rawPDU + dataBlockOffset);
+	trellis.encode34(dataBlock, rawPDU + dataBlockOffset);
 
 	// Encode raw bits → output with SS bit insertion
 	::memset(pdu, 0x00U, 256U);

@@ -224,51 +224,23 @@ unsigned int CP25SABridge::getPendingPDU(unsigned char* pdu, CP25NID& nid, unsig
 
 	CP25Trellis trellis;
 	unsigned char header[P25_PDU_HEADER_LENGTH_BYTES];
-	bool valid = trellis.decode12(m_rawPDU + headerOffset, header);
-	if (!valid) {
-		LogMessage("P25 SA Bridge, failed to decode header from raw PDU, skipping TX");
-		m_pendingTransmit = false;
-		m_delayTimer.stop();
-		return 0U;
+	if (trellis.decode12(m_rawPDU + headerOffset, header)) {
+		unsigned int blockCount = header[6U] & 0x7FU;
+		CUtils::dump(2U, "P25 SA Bridge, TX header (original)", header, P25_PDU_HEADER_LENGTH_BYTES);
+
+		for (unsigned int i = 0U; i < blockCount && i < 4U; i++) {
+			unsigned char blockData[P25_PDU_CONFIRMED_LENGTH_BYTES];
+			unsigned int blockOffset = headerOffset + P25_PDU_FEC_LENGTH_BYTES + i * P25_PDU_FEC_LENGTH_BYTES;
+			if (trellis.decode34(m_rawPDU + blockOffset, blockData))
+				CUtils::dump(2U, "P25 SA Bridge, TX data block (real)", blockData, P25_PDU_CONFIRMED_LENGTH_BYTES);
+			else
+				LogMessage("P25 SA Bridge, TX data block %u trellis decode FAILED", i);
+		}
 	}
 
-	unsigned int origBlocks = header[6U] & 0x7FU;
-	unsigned int txBlocks = (origBlocks <= 8U) ? origBlocks : 8U;
+	::memset(pdu, 0x00U, 600U);
 
-	header[6U] = (header[6U] & 0x80U) | (txBlocks & 0x7FU);
-
-	header[10U] = 0x00U;
-	header[11U] = 0x00U;
-	CCRC::addCCITT162(header, P25_PDU_HEADER_LENGTH_BYTES);
-
-	CUtils::dump(2U, "P25 SA Bridge, TX header (decoded)", header, P25_PDU_HEADER_LENGTH_BYTES);
-
-	for (unsigned int i = 0U; i < txBlocks && i < 3U; i++) {
-		unsigned char blockData[P25_PDU_CONFIRMED_LENGTH_BYTES];
-		unsigned int blockOffset = headerOffset + P25_PDU_FEC_LENGTH_BYTES + i * P25_PDU_FEC_LENGTH_BYTES;
-		bool blockValid = trellis.decode34(m_rawPDU + blockOffset, blockData);
-		if (blockValid)
-			CUtils::dump(2U, "P25 SA Bridge, TX data block (real)", blockData, P25_PDU_CONFIRMED_LENGTH_BYTES);
-		else
-			LogMessage("P25 SA Bridge, TX data block %u trellis decode FAILED", i);
-	}
-
-	unsigned char densePDU[300U];
-	::memset(densePDU, 0x00U, 300U);
-
-	::memcpy(densePDU, m_rawPDU, headerOffset);
-
-	trellis.encode12(header, densePDU + headerOffset);
-
-	const unsigned int dataOffset = headerOffset + P25_PDU_FEC_LENGTH_BYTES;
-	const unsigned int dataFECLen = txBlocks * P25_PDU_FEC_LENGTH_BYTES;
-	::memcpy(densePDU + dataOffset, m_rawPDU + dataOffset, dataFECLen);
-
-	unsigned int denseBitLen = P25_SYNC_LENGTH_BITS + P25_NID_LENGTH_BITS +
-	                           P25_PDU_FEC_LENGTH_BITS + txBlocks * P25_PDU_FEC_LENGTH_BITS;
-
-	::memset(pdu, 0x00U, 300U);
-	unsigned int airBitLength = CP25Utils::encode(densePDU, pdu + 2U, denseBitLen);
+	unsigned int airBitLength = CP25Utils::encode(m_rawPDU, pdu + 2U, m_rawBitLength);
 	unsigned int airByteLength = airBitLength / 8U;
 	if ((airBitLength % 8U) > 0U)
 		airByteLength++;
@@ -281,8 +253,8 @@ unsigned int CP25SABridge::getPendingPDU(unsigned char* pdu, CP25NID& nid, unsig
 
 	bitLength = airBitLength;
 
-	LogMessage("P25 SA Bridge, transmitting SAP 31 PDU (%u blocks, %u air bytes, orig %u blocks)",
-		txBlocks, airByteLength, origBlocks);
+	LogMessage("P25 SA Bridge, transmitting FULL SAP 31 PDU (%u air bytes, %u raw bits)",
+		airByteLength, m_rawBitLength);
 
 	m_pendingTransmit = false;
 	m_gpsValid = false;

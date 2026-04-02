@@ -216,8 +216,8 @@ unsigned int CP25SABridge::getPendingPDU(unsigned char* pdu, CP25NID& nid)
 	pdu[0U] = TAG_HEADER;
 	pdu[1U] = 0x00U;
 
-	LogMessage("P25 SA Bridge, transmitting SAP 31 PDU replay for RID %u: lat=%.6f lon=%.6f (%u bytes, %u blocks)",
-		m_gpsSrcId, m_gpsLatitude, m_gpsLongitude, newByteLength + 2U, m_templateBlockCount);
+	LogMessage("P25 SA Bridge, transmitting SAP 31 PDU replay for RID %u: lat=%.6f lon=%.6f (%u frame bytes, %u blocks)",
+		m_gpsSrcId, m_gpsLatitude, m_gpsLongitude, newByteLength, m_templateBlockCount);
 
 	m_pendingTransmit = false;
 	m_gpsValid = false;

@@ -22,6 +22,8 @@
 #include "P25NID.h"
 #include "Timer.h"
 
+const unsigned int SA_BRIDGE_MAX_BLOCKS = 9U;
+
 class CP25SABridge {
 public:
 	CP25SABridge(unsigned int delayMs);
@@ -52,8 +54,11 @@ private:
 	bool         m_pendingTransmit;
 	CTimer       m_delayTimer;
 
-	unsigned char m_lastPDUHeader[12U];
-	bool          m_lastPDUHeaderValid;
+	bool          m_templateValid;
+	unsigned int  m_templateBlockCount;
+	unsigned char m_templateHeader[12U];
+	unsigned char m_templateBlocks[SA_BRIDGE_MAX_BLOCKS][18U];
+	bool          m_templateBlockConfirmed[SA_BRIDGE_MAX_BLOCKS];
 };
 
 #endif

@@ -874,7 +874,7 @@ void CP25Control::clock(unsigned int ms)
 		m_saBridge->clock(ms);
 
 		if (m_saBridge->hasPendingPDU() && m_rfState == RPT_RF_STATE::LISTENING) {
-			unsigned char pdu[256U];
+			unsigned char pdu[600U];
 			unsigned int len = m_saBridge->getPendingPDU(pdu, m_nid);
 			if (len > 0U) {
 				addBusyBits(pdu + 2U, (len - 2U) * 8U, true, false);

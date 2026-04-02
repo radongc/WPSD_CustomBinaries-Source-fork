@@ -106,13 +106,13 @@ void CP25SABridge::processVoiceLC(const unsigned char* rs, unsigned int srcId)
 void CP25SABridge::logPDU(unsigned int sap, unsigned int llId, unsigned int blockCount, const unsigned char* header, unsigned int headerLen)
 {
 	LogMessage("P25 SA Bridge, captured SAP %u PDU header from LLId %u, %u blocks:", sap, llId, blockCount);
-	CUtils::dump(1U, "P25 SA Bridge, PDU Header bytes", header, headerLen);
+	CUtils::dump(2U, "P25 SA Bridge, PDU Header bytes", header, headerLen);
 }
 
 void CP25SABridge::logPDUDataBlock(unsigned int sap, const unsigned char* dataBlock, unsigned int blockLen, unsigned int blockIndex)
 {
 	LogMessage("P25 SA Bridge, captured SAP %u data block %u (%u bytes):", sap, blockIndex, blockLen);
-	CUtils::dump(1U, "P25 SA Bridge, PDU Data Block bytes", dataBlock, blockLen);
+	CUtils::dump(2U, "P25 SA Bridge, PDU Data Block bytes", dataBlock, blockLen);
 }
 
 void CP25SABridge::onVoiceEnd()
@@ -195,8 +195,8 @@ unsigned int CP25SABridge::getPendingPDU(unsigned char* pdu, CP25NID& nid)
 	dataBlock[10U] = 0x00U;
 	dataBlock[11U] = 0x00U;
 
-	CUtils::dump(1U, "P25 SA Bridge, TX PDU header", header, P25_PDU_HEADER_LENGTH_BYTES);
-	CUtils::dump(1U, "P25 SA Bridge, TX PDU data block", dataBlock, P25_PDU_UNCONFIRMED_LENGTH_BYTES);
+	CUtils::dump(2U, "P25 SA Bridge, TX PDU header", header, P25_PDU_HEADER_LENGTH_BYTES);
+	CUtils::dump(2U, "P25 SA Bridge, TX PDU data block", dataBlock, P25_PDU_UNCONFIRMED_LENGTH_BYTES);
 
 	// --- Assemble the raw bit buffer (no SS bits yet) ---
 	//

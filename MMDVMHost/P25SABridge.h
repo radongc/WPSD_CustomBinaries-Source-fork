@@ -36,7 +36,7 @@ public:
 
 	void clock(unsigned int ms);
 
-	bool hasPendingPDU() const;
+	bool hasPendingPDU();
 	unsigned int getPendingPDU(unsigned char* pdu, CP25NID& nid);
 
 	void reset();

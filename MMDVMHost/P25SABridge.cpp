@@ -133,7 +133,7 @@ void CP25SABridge::clock(unsigned int ms)
 	m_delayTimer.clock(ms);
 }
 
-bool CP25SABridge::hasPendingPDU() const
+bool CP25SABridge::hasPendingPDU()
 {
 	return m_pendingTransmit && m_delayTimer.isRunning() && m_delayTimer.hasExpired();
 }

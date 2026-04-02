@@ -174,7 +174,7 @@ unsigned int CP25SABridge::getPendingPDU(unsigned char* pdu, CP25NID& nid, unsig
 	}
 
 	unsigned char txHeader[] = {
-		0x35U, 0xDFU, 0xA4U, 0xFFU, 0xFFU, 0xFFU, 0x82U, 0x09U, 0x00U, 0x00U, 0x00U, 0x00U
+		0x35U, 0xDFU, 0xA4U, 0xFFU, 0xFFU, 0xFFU, 0x88U, 0x09U, 0x00U, 0x00U, 0x00U, 0x00U
 	};
 	CCRC::addCCITT162(txHeader, P25_PDU_HEADER_LENGTH_BYTES);
 
@@ -186,22 +186,28 @@ unsigned int CP25SABridge::getPendingPDU(unsigned char* pdu, CP25NID& nid, unsig
 		0x2DU, 0x53U, 0x1BU, 0x6BU, 0x42U, 0xBBU, 0x6DU, 0xB6U, 0xDBU, 0x6DU, 0xB6U, 0xDBU,
 		0x6DU, 0xB0U, 0xDBU, 0x6DU, 0xB6U, 0xDBU
 	};
+	const unsigned char blkPad[] = {
+		0x6DU, 0xB6U, 0xDBU, 0x6DU, 0xB6U, 0xDBU, 0x6DU, 0xB6U, 0xDBU, 0x6DU, 0xB6U, 0xDBU,
+		0x6DU, 0xB6U, 0xDBU, 0x6DU, 0xB6U, 0xDBU
+	};
 
-	const unsigned int blockCount = 2U;
+	const unsigned int blockCount = 8U;
 	const unsigned int totalFECBlocks = 1U + blockCount;
 	const unsigned int headerOffset = P25_SYNC_LENGTH_BYTES + P25_NID_LENGTH_BYTES;
 	const unsigned int totalRawBits = P25_SYNC_LENGTH_BITS + P25_NID_LENGTH_BITS
 	                                + totalFECBlocks * P25_PDU_FEC_LENGTH_BITS;
 
-	unsigned char rawPDU[120U];
-	::memset(rawPDU, 0x00U, 120U);
+	unsigned char rawPDU[240U];
+	::memset(rawPDU, 0x00U, 240U);
 
 	CP25Trellis trellis;
 	trellis.encode12(txHeader, rawPDU + headerOffset);
 	trellis.encode34(blk0, rawPDU + headerOffset + 1U * P25_PDU_FEC_LENGTH_BYTES);
 	trellis.encode34(blk1, rawPDU + headerOffset + 2U * P25_PDU_FEC_LENGTH_BYTES);
+	for (unsigned int i = 2U; i < blockCount; i++)
+		trellis.encode34(blkPad, rawPDU + headerOffset + (i + 1U) * P25_PDU_FEC_LENGTH_BYTES);
 
-	::memset(pdu, 0x00U, 200U);
+	::memset(pdu, 0x00U, 250U);
 
 	unsigned int newBitLength = CP25Utils::encode(rawPDU, pdu + 2U, totalRawBits);
 	unsigned int newByteLength = newBitLength / 8U;

@@ -153,6 +153,11 @@ void CP25SABridge::captureRawPDU(unsigned int sap, const unsigned char* rfPDU, u
 	if (sap != 31U)
 		return;
 
+	if (m_rawValid && m_beaconActive) {
+		LogMessage("P25 SA Bridge, ignoring new SAP 31 capture (beacon already active with locked template)");
+		return;
+	}
+
 	unsigned int byteLen = bitLength / 8U;
 	if ((bitLength % 8U) > 0U)
 		byteLen++;

@@ -673,8 +673,10 @@ bool CP25Control::writeModem(unsigned char* data, unsigned int len)
 
 				bool logThisPDU = (m_saBridge != nullptr && (pduSap == 31U || pduSap == 32U));
 
-				if (logThisPDU)
+				if (logThisPDU) {
 					m_saBridge->logPDU(pduSap, pduLLId, m_rfDataFrames, header, P25_PDU_HEADER_LENGTH_BYTES);
+					m_saBridge->captureRawPDU(pduSap, m_rfPDU, bitLength);
+				}
 
 				// Regenerate the PDU data
 				for (unsigned int i = 0U; i < m_rfDataFrames; i++) {
@@ -874,12 +876,31 @@ void CP25Control::clock(unsigned int ms)
 		m_saBridge->clock(ms);
 
 		if (m_saBridge->hasPendingPDU() && m_rfState == RPT_RF_STATE::LISTENING) {
-			unsigned char pdu[250U];
+			unsigned char pdu[600U];
 			unsigned int pduBitLength = 0U;
 			unsigned int len = m_saBridge->getPendingPDU(pdu, m_nid, pduBitLength);
 			if (len > 0U) {
 				addBusyBits(pdu + 2U, pduBitLength, true, false);
-				writeQueueRF(pdu, len);
+
+				unsigned int frameLen = len - 2U;
+				const unsigned int MAX_CHUNK = P25_LDU_FRAME_LENGTH_BYTES;
+				unsigned int offset = 0U;
+				bool first = true;
+
+				while (offset < frameLen) {
+					unsigned int chunkLen = frameLen - offset;
+					if (chunkLen > MAX_CHUNK)
+						chunkLen = MAX_CHUNK;
+
+					unsigned char chunk[250U];
+					chunk[0U] = first ? TAG_HEADER : TAG_DATA;
+					chunk[1U] = 0x00U;
+					::memcpy(chunk + 2U, pdu + 2U + offset, chunkLen);
+					writeQueueRF(chunk, chunkLen + 2U);
+
+					offset += chunkLen;
+					first = false;
+				}
 
 				unsigned char eot[P25_TERM_FRAME_LENGTH_BYTES + 2U];
 				::memset(eot, 0x00U, P25_TERM_FRAME_LENGTH_BYTES + 2U);

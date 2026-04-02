@@ -34,6 +34,8 @@ public:
 	void logPDU(unsigned int sap, unsigned int llId, unsigned int blockCount, const unsigned char* header, unsigned int headerLen);
 	void logPDUDataBlock(unsigned int sap, const unsigned char* dataBlock, unsigned int blockLen, unsigned int blockIndex);
 
+	void captureRawPDU(unsigned int sap, const unsigned char* rfPDU, unsigned int bitLength);
+
 	void onVoiceEnd();
 
 	void clock(unsigned int ms);
@@ -53,6 +55,10 @@ private:
 
 	bool         m_pendingTransmit;
 	CTimer       m_delayTimer;
+
+	bool          m_rawValid;
+	unsigned int  m_rawBitLength;
+	unsigned char m_rawPDU[300U];
 
 	bool          m_templateValid;
 	unsigned int  m_templateBlockCount;

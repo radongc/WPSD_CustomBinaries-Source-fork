@@ -60,6 +60,9 @@ private:
 	unsigned int  m_rawBitLength;
 	unsigned char m_rawPDU[300U];
 
+	CTimer        m_beaconTimer;
+	bool          m_beaconActive;
+
 	bool          m_templateValid;
 	unsigned int  m_templateBlockCount;
 	unsigned char m_templateHeader[12U];

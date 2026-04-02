@@ -50,6 +50,8 @@ m_pendingTransmit(false),
 m_delayTimer(1000U, 0U, delayMs),
 m_rawValid(false),
 m_rawBitLength(0U),
+m_beaconTimer(1000U, 10U, 0U),
+m_beaconActive(false),
 m_templateValid(false),
 m_templateBlockCount(0U)
 {
@@ -165,6 +167,12 @@ void CP25SABridge::captureRawPDU(unsigned int sap, const unsigned char* rfPDU, u
 	m_rawValid = true;
 
 	LogMessage("P25 SA Bridge, captured raw SAP 31 PDU bitstream (%u bits, %u bytes)", bitLength, byteLen);
+
+	if (!m_beaconActive) {
+		m_beaconActive = true;
+		m_beaconTimer.start();
+		LogMessage("P25 SA Bridge, starting continuous SA beacon (10s interval)");
+	}
 }
 
 void CP25SABridge::onVoiceEnd()
@@ -182,30 +190,73 @@ void CP25SABridge::onVoiceEnd()
 void CP25SABridge::clock(unsigned int ms)
 {
 	m_delayTimer.clock(ms);
+	m_beaconTimer.clock(ms);
 }
 
 bool CP25SABridge::hasPendingPDU()
 {
-	return m_pendingTransmit && m_delayTimer.isRunning() && m_delayTimer.hasExpired();
+	if (m_pendingTransmit && m_delayTimer.isRunning() && m_delayTimer.hasExpired())
+		return true;
+
+	if (m_beaconActive && m_rawValid && m_beaconTimer.isRunning() && m_beaconTimer.hasExpired())
+		return true;
+
+	return false;
 }
 
 unsigned int CP25SABridge::getPendingPDU(unsigned char* pdu, CP25NID& nid, unsigned int& bitLength)
 {
 	bitLength = 0U;
 
-	if (!m_gpsValid || !m_rawValid) {
-		if (!m_rawValid)
-			LogMessage("P25 SA Bridge, no raw SAP 31 template captured yet, skipping TX");
-		reset();
+	if (!m_rawValid) {
+		LogMessage("P25 SA Bridge, no raw SAP 31 template captured yet, skipping TX");
+		m_pendingTransmit = false;
+		m_delayTimer.stop();
 		return 0U;
 	}
 
-	::memset(pdu, 0x00U, 300U);
+	const unsigned int headerOffset = P25_SYNC_LENGTH_BYTES + P25_NID_LENGTH_BYTES;
 
-	unsigned int newBitLength = CP25Utils::encode(m_rawPDU, pdu + 2U, m_rawBitLength);
-	unsigned int newByteLength = newBitLength / 8U;
-	if ((newBitLength % 8U) > 0U)
-		newByteLength++;
+	CP25Trellis trellis;
+	unsigned char header[P25_PDU_HEADER_LENGTH_BYTES];
+	bool valid = trellis.decode12(m_rawPDU + headerOffset, header);
+	if (!valid) {
+		LogMessage("P25 SA Bridge, failed to decode header from raw PDU, skipping TX");
+		m_pendingTransmit = false;
+		m_delayTimer.stop();
+		return 0U;
+	}
+
+	unsigned int origBlocks = header[6U] & 0x7FU;
+	unsigned int txBlocks = (origBlocks <= 8U) ? origBlocks : 8U;
+
+	header[6U] = (header[6U] & 0x80U) | (txBlocks & 0x7FU);
+
+	header[10U] = 0x00U;
+	header[11U] = 0x00U;
+	CCRC::addCCITT162(header, P25_PDU_HEADER_LENGTH_BYTES);
+
+	CUtils::dump(2U, "P25 SA Bridge, TX header (decoded)", header, P25_PDU_HEADER_LENGTH_BYTES);
+
+	unsigned char densePDU[300U];
+	::memset(densePDU, 0x00U, 300U);
+
+	::memcpy(densePDU, m_rawPDU, headerOffset);
+
+	trellis.encode12(header, densePDU + headerOffset);
+
+	const unsigned int dataOffset = headerOffset + P25_PDU_FEC_LENGTH_BYTES;
+	const unsigned int dataFECLen = txBlocks * P25_PDU_FEC_LENGTH_BYTES;
+	::memcpy(densePDU + dataOffset, m_rawPDU + dataOffset, dataFECLen);
+
+	unsigned int denseBitLen = P25_SYNC_LENGTH_BITS + P25_NID_LENGTH_BITS +
+	                           P25_PDU_FEC_LENGTH_BITS + txBlocks * P25_PDU_FEC_LENGTH_BITS;
+
+	::memset(pdu, 0x00U, 300U);
+	unsigned int airBitLength = CP25Utils::encode(densePDU, pdu + 2U, denseBitLen);
+	unsigned int airByteLength = airBitLength / 8U;
+	if ((airBitLength % 8U) > 0U)
+		airByteLength++;
 
 	CSync::addP25Sync(pdu + 2U);
 	nid.encode(pdu + 2U, P25_DUID_PDU);
@@ -213,16 +264,17 @@ unsigned int CP25SABridge::getPendingPDU(unsigned char* pdu, CP25NID& nid, unsig
 	pdu[0U] = TAG_HEADER;
 	pdu[1U] = 0x00U;
 
-	bitLength = newBitLength;
+	bitLength = airBitLength;
 
-	LogMessage("P25 SA Bridge, transmitting RAW REPLAY SAP 31 PDU (%u frame bytes, %u air bits, raw %u bits)",
-		newByteLength, newBitLength, m_rawBitLength);
+	LogMessage("P25 SA Bridge, transmitting SAP 31 PDU (%u blocks, %u air bytes, orig %u blocks)",
+		txBlocks, airByteLength, origBlocks);
 
 	m_pendingTransmit = false;
 	m_gpsValid = false;
 	m_delayTimer.stop();
+	m_beaconTimer.start();
 
-	return newByteLength + 2U;
+	return airByteLength + 2U;
 }
 
 void CP25SABridge::reset()
@@ -233,4 +285,6 @@ void CP25SABridge::reset()
 	m_gpsLongitude    = 0.0;
 	m_pendingTransmit = false;
 	m_delayTimer.stop();
+	m_beaconTimer.stop();
+	m_beaconActive    = false;
 }

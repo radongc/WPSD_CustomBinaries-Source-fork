@@ -177,9 +177,16 @@ unsigned int CP25SABridge::getPendingPDU(unsigned char* pdu, CP25NID& nid)
 		return 0U;
 	}
 
-	// Replay the captured SAP 31 template unchanged.
-	// All CRCs (header + data block CRC-9) remain valid.
-	CUtils::dump(2U, "P25 SA Bridge, TX SAP 31 header", m_templateHeader, P25_PDU_HEADER_LENGTH_BYTES);
+	unsigned char txHeader[P25_PDU_HEADER_LENGTH_BYTES];
+	::memcpy(txHeader, m_templateHeader, P25_PDU_HEADER_LENGTH_BYTES);
+
+	txHeader[3U] = (unsigned char)((m_gpsSrcId >> 16) & 0xFFU);
+	txHeader[4U] = (unsigned char)((m_gpsSrcId >> 8)  & 0xFFU);
+	txHeader[5U] = (unsigned char)((m_gpsSrcId >> 0)  & 0xFFU);
+
+	CCRC::addCCITT162(txHeader, P25_PDU_HEADER_LENGTH_BYTES);
+
+	CUtils::dump(2U, "P25 SA Bridge, TX SAP 31 header (LLId patched)", txHeader, P25_PDU_HEADER_LENGTH_BYTES);
 
 	unsigned int totalFECBlocks = 1U + m_templateBlockCount;
 	const unsigned int headerOffset = P25_SYNC_LENGTH_BYTES + P25_NID_LENGTH_BYTES;
@@ -193,7 +200,7 @@ unsigned int CP25SABridge::getPendingPDU(unsigned char* pdu, CP25NID& nid)
 	::memset(rawPDU, 0x00U, 300U);
 
 	CP25Trellis trellis;
-	trellis.encode12(m_templateHeader, rawPDU + headerOffset);
+	trellis.encode12(txHeader, rawPDU + headerOffset);
 
 	for (unsigned int i = 0U; i < m_templateBlockCount; i++) {
 		unsigned int blockOffset = headerOffset + (i + 1U) * P25_PDU_FEC_LENGTH_BYTES;

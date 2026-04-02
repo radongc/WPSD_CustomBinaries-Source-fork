@@ -941,25 +941,32 @@ void CModem::clock(unsigned int ms)
 		m_ysfSpace--;
 	}
 
-	while (m_p25Space > 0U && !m_txP25Data.isEmpty()) {
-		unsigned char len = 0U;
-		m_txP25Data.getData(&len, 1U);
-		m_txP25Data.getData(m_buffer, len);
+	{
+		unsigned int p25FramesSent = 0U;
+		while (m_p25Space > 0U && !m_txP25Data.isEmpty()) {
+			unsigned char len = 0U;
+			m_txP25Data.getData(&len, 1U);
+			m_txP25Data.getData(m_buffer, len);
 
-		if (m_trace) {
-			if (m_buffer[2U] == MMDVM_P25_HDR)
-				CUtils::dump(1U, "TX P25 HDR", m_buffer, len);
-			else
-				CUtils::dump(1U, "TX P25 LDU", m_buffer, len);
+			if (m_trace) {
+				if (m_buffer[2U] == MMDVM_P25_HDR)
+					CUtils::dump(1U, "TX P25 HDR", m_buffer, len);
+				else
+					CUtils::dump(1U, "TX P25 LDU", m_buffer, len);
+			}
+
+			int ret = m_port->write(m_buffer, len);
+			if (ret != int(len))
+				LogDebug("Error when writing P25 data to the MMDVM");
+
+			m_playoutTimer.start();
+
+			m_p25Space--;
+			p25FramesSent++;
 		}
-
-		int ret = m_port->write(m_buffer, len);
-		if (ret != int(len))
-			LogDebug("Error when writing P25 data to the MMDVM");
-
-		m_playoutTimer.start();
-
-		m_p25Space--;
+		if (p25FramesSent > 0U)
+			LogMessage("Modem, sent %u P25 frame(s) to modem in one burst (space remaining=%u, queued=%s)",
+				p25FramesSent, m_p25Space, m_txP25Data.isEmpty() ? "empty" : "has more");
 	}
 
 	if (m_nxdnSpace > 1U && !m_txNXDNData.isEmpty()) {

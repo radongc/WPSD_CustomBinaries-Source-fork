@@ -226,15 +226,54 @@ unsigned int CP25SABridge::getPendingPDU(unsigned char* pdu, CP25NID& nid, unsig
 	unsigned char header[P25_PDU_HEADER_LENGTH_BYTES];
 	if (trellis.decode12(m_rawPDU + headerOffset, header)) {
 		unsigned int blockCount = header[6U] & 0x7FU;
+		unsigned int padCount   = (header[7U] >> 3) & 0x1FU;
 		CUtils::dump(2U, "P25 SA Bridge, TX header (original)", header, P25_PDU_HEADER_LENGTH_BYTES);
+		LogMessage("P25 SA Bridge, TX header: SAP=%u MFID=$%02X LLId=%u blocks=%u pad=%u",
+			header[1U] & 0x3FU, header[2U],
+			(header[3U] << 16) | (header[4U] << 8) | header[5U],
+			blockCount, padCount);
 
-		for (unsigned int i = 0U; i < blockCount && i < 4U; i++) {
+		unsigned char lrrpPayload[256U];
+		unsigned int lrrpLen = 0U;
+
+		for (unsigned int i = 0U; i < blockCount; i++) {
 			unsigned char blockData[P25_PDU_CONFIRMED_LENGTH_BYTES];
 			unsigned int blockOffset = headerOffset + P25_PDU_FEC_LENGTH_BYTES + i * P25_PDU_FEC_LENGTH_BYTES;
-			if (trellis.decode34(m_rawPDU + blockOffset, blockData))
-				CUtils::dump(2U, "P25 SA Bridge, TX data block (real)", blockData, P25_PDU_CONFIRMED_LENGTH_BYTES);
-			else
-				LogMessage("P25 SA Bridge, TX data block %u trellis decode FAILED", i);
+			if (trellis.decode34(m_rawPDU + blockOffset, blockData)) {
+				unsigned int serial = blockData[0U] >> 1;
+				CUtils::dump(2U, "P25 SA Bridge, TX block (real)", blockData, P25_PDU_CONFIRMED_LENGTH_BYTES);
+				LogMessage("P25 SA Bridge, TX block %u serial=%u", i, serial);
+
+				unsigned int dataBytes = 16U;
+				if (i == blockCount - 1U && padCount > 0U)
+					dataBytes = (padCount < 16U) ? 16U - padCount : 0U;
+				if (lrrpLen + dataBytes <= 256U) {
+					for (unsigned int b = 0U; b < dataBytes; b++) {
+						unsigned int srcBit = 7U + b * 8U;
+						unsigned int srcByte = srcBit / 8U;
+						unsigned int srcShift = 7U - (srcBit % 8U);
+						unsigned char val = 0U;
+						for (unsigned int bit = 0U; bit < 8U; bit++) {
+							unsigned int pos = 7U + b * 8U + bit;
+							unsigned int byteIdx = pos / 8U;
+							unsigned int bitIdx  = 7U - (pos % 8U);
+							if (byteIdx < 18U && (blockData[byteIdx] & (1U << bitIdx)))
+								val |= (1U << (7U - bit));
+						}
+						lrrpPayload[lrrpLen++] = val;
+					}
+				}
+			} else {
+				LogMessage("P25 SA Bridge, TX block %u trellis decode FAILED", i);
+			}
+		}
+
+		if (lrrpLen > 0U) {
+			CUtils::dump(2U, "P25 SA Bridge, LRRP payload (extracted)", lrrpPayload, lrrpLen);
+			if (lrrpLen >= 3U)
+				LogMessage("P25 SA Bridge, LRRP source RID (first 3 bytes): %u (0x%02X%02X%02X)",
+					(lrrpPayload[0U] << 16) | (lrrpPayload[1U] << 8) | lrrpPayload[2U],
+					lrrpPayload[0U], lrrpPayload[1U], lrrpPayload[2U]);
 		}
 	}
 

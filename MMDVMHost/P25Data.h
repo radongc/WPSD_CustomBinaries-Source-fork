@@ -34,6 +34,7 @@ public:
 	void encodeHeader(unsigned char* data);
 
 	bool decodeLDU1(const unsigned char* data);
+	bool decodeLDU1Raw(const unsigned char* data, unsigned char* rs);
 	void encodeLDU1(unsigned char* data);
 
 	bool decodeLDU2(const unsigned char* data);

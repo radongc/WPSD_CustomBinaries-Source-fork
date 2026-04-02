@@ -168,6 +168,8 @@ m_p25NAC(0x293U),
 m_p25SelfOnly(false),
 m_p25OverrideUID(false),
 m_p25RemoteGateway(false),
+m_p25SABridgeEnabled(false),
+m_p25SABridgeDelay(500U),
 m_p25TXHang(5U),
 m_p25ModeHang(10U),
 m_nxdnEnabled(false),
@@ -745,6 +747,10 @@ bool CConf::read()
 				m_p25TXHang = (unsigned int)::atoi(value);
 			else if (::strcmp(key, "ModeHang") == 0)
 				m_p25ModeHang = (unsigned int)::atoi(value);
+			else if (::strcmp(key, "SABridge") == 0)
+				m_p25SABridgeEnabled = ::atoi(value) == 1;
+			else if (::strcmp(key, "SABridgeDelay") == 0)
+				m_p25SABridgeDelay = (unsigned int)::atoi(value);
 		} else if (section == SECTION::NXDN) {
 			if (::strcmp(key, "Enable") == 0)
 				m_nxdnEnabled = ::atoi(value) == 1;
@@ -1619,6 +1625,16 @@ unsigned int CConf::getP25TXHang() const
 unsigned int CConf::getP25ModeHang() const
 {
 	return m_p25ModeHang;
+}
+
+bool CConf::getP25SABridgeEnabled() const
+{
+	return m_p25SABridgeEnabled;
+}
+
+unsigned int CConf::getP25SABridgeDelay() const
+{
+	return m_p25SABridgeDelay;
 }
 
 bool CConf::getNXDNEnabled() const

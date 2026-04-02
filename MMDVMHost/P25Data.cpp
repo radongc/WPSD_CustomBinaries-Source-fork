@@ -204,6 +204,44 @@ bool CP25Data::decodeLDU1(const unsigned char* data)
 	return true;
 }
 
+bool CP25Data::decodeLDU1Raw(const unsigned char* data, unsigned char* rsOut)
+{
+	assert(data != nullptr);
+	assert(rsOut != nullptr);
+
+	unsigned char rs[18U];
+
+	unsigned char raw[5U];
+	CP25Utils::decode(data, raw, 410U, 452U);
+	decodeLDUHamming(raw, rs + 0U);
+
+	CP25Utils::decode(data, raw, 600U, 640U);
+	decodeLDUHamming(raw, rs + 3U);
+
+	CP25Utils::decode(data, raw, 788U, 830U);
+	decodeLDUHamming(raw, rs + 6U);
+
+	CP25Utils::decode(data, raw, 978U, 1020U);
+	decodeLDUHamming(raw, rs + 9U);
+
+	CP25Utils::decode(data, raw, 1168U, 1208U);
+	decodeLDUHamming(raw, rs + 12U);
+
+	CP25Utils::decode(data, raw, 1356U, 1398U);
+	decodeLDUHamming(raw, rs + 15U);
+
+	try {
+		bool ret = m_rs.decode241213(rs);
+		if (!ret)
+			return false;
+	} catch (...) {
+		return false;
+	}
+
+	::memcpy(rsOut, rs, 9U);
+	return true;
+}
+
 void CP25Data::encodeLDU1(unsigned char* data)
 {
 	assert(data != nullptr);

@@ -143,14 +143,14 @@ unsigned int CP25SABridge::getPendingPDU(unsigned char* pdu, CP25NID& nid)
 		return 0U;
 	}
 
-	// --- PDU Header: exact XG-100P SAP 32 format, with APX source RID ---
+	// --- PDU Header: XG-100P SAP 32 format, LLId = broadcast (SA_ADDRESS) ---
 	unsigned char header[P25_PDU_HEADER_LENGTH_BYTES];
 	header[0U]  = 0x56U;
 	header[1U]  = 0xE0U;                                    // SAP 32 with upper flags
 	header[2U]  = 0x00U;                                    // MFId
-	header[3U]  = (m_gpsSrcId >> 16) & 0xFFU;
-	header[4U]  = (m_gpsSrcId >> 8)  & 0xFFU;
-	header[5U]  = m_gpsSrcId & 0xFFU;
+	header[3U]  = 0xFFU;                                    // LLId = 0xFFFFFF (broadcast)
+	header[4U]  = 0xFFU;
+	header[5U]  = 0xFFU;
 	header[6U]  = 0x81U;                                    // 1 block + full message flag
 	header[7U]  = 0x00U;
 	header[8U]  = 0x88U;

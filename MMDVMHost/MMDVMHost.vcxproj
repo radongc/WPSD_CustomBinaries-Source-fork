@@ -1,4 +1,4 @@
-﻿<?xml version="1.0" encoding="utf-8"?>
+<?xml version="1.0" encoding="utf-8"?>
 <Project DefaultTargets="Build" ToolsVersion="15.0" xmlns="http://schemas.microsoft.com/developer/msbuild/2003">
   <ItemGroup Label="ProjectConfigurations">
     <ProjectConfiguration Include="Debug|Win32">
@@ -227,6 +227,7 @@
     <ClInclude Include="NXDNUDCH.h" />
     <ClInclude Include="P25Audio.h" />
     <ClInclude Include="P25Control.h" />
+    <ClInclude Include="P25SABridge.h" />
     <ClInclude Include="P25Defines.h" />
     <ClInclude Include="P25Data.h" />
     <ClInclude Include="P25LowSpeedData.h" />
@@ -330,6 +331,7 @@
     <ClCompile Include="NXDNUDCH.cpp" />
     <ClCompile Include="P25Audio.cpp" />
     <ClCompile Include="P25Control.cpp" />
+    <ClCompile Include="P25SABridge.cpp" />
     <ClCompile Include="P25Data.cpp" />
     <ClCompile Include="P25LowSpeedData.cpp" />
     <ClCompile Include="P25Network.cpp" />

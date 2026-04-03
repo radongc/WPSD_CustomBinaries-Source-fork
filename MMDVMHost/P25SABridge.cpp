@@ -253,49 +253,70 @@ void CP25SABridge::decodeSAP31(const unsigned char* rfPDU, unsigned int bitLengt
 	if (payloadLen == 0U)
 		return;
 
-	CUtils::dump(2U, "P25 SA Bridge, LRRP raw payload (AMBTc, all block bytes)", payload, payloadLen);
+	CUtils::dump(2U, "P25 SA Bridge, LRRP raw payload (full block bytes)", payload, payloadLen);
 
-	const double SCALE32 = 360.0 / 4294967296.0;
-
-	for (unsigned int i = 0U; i + 7U < payloadLen; i++) {
-		uint32_t uA = ((uint32_t)payload[i] << 24) | ((uint32_t)payload[i+1U] << 16) |
-		              ((uint32_t)payload[i+2U] << 8) | (uint32_t)payload[i+3U];
-		uint32_t uB = ((uint32_t)payload[i+4U] << 24) | ((uint32_t)payload[i+5U] << 16) |
-		              ((uint32_t)payload[i+6U] << 8) | (uint32_t)payload[i+7U];
-
-		double a = (double)(int32_t)uA * SCALE32;
-		double b = (double)(int32_t)uB * SCALE32;
-
-		if (a >= 39.0 && a <= 42.0 && b >= -84.0 && b <= -80.0)
-			LogMessage("P25 SA Bridge, GPS MATCH at byte %u: lat=%.6f lon=%.6f (raw 0x%08X 0x%08X)",
-				i, a, b, uA, uB);
-
-		if (b >= 39.0 && b <= 42.0 && a >= -84.0 && a <= -80.0)
-			LogMessage("P25 SA Bridge, GPS MATCH (swapped) at byte %u: lat=%.6f lon=%.6f (raw 0x%08X 0x%08X)",
-				i, b, a, uB, uA);
+	unsigned char cfPayload[256U];
+	unsigned int cfLen = 0U;
+	for (unsigned int i = 0U; i < blockCount && i < SA_BRIDGE_MAX_BLOCKS; i++) {
+		unsigned char blockData[P25_PDU_CONFIRMED_LENGTH_BYTES];
+		unsigned int blockOffset = headerOffset + P25_PDU_FEC_LENGTH_BYTES + i * P25_PDU_FEC_LENGTH_BYTES;
+		if (!trellis.decode34(rfPDU + blockOffset, blockData))
+			continue;
+		unsigned int dataBytes = 16U;
+		if (i == blockCount - 1U && padCount > 0U && padCount < 16U)
+			dataBytes = 16U - padCount;
+		if (cfLen + dataBytes <= 256U) {
+			for (unsigned int b = 0U; b < dataBytes; b++) {
+				unsigned char val = 0U;
+				for (unsigned int bit = 0U; bit < 8U; bit++) {
+					unsigned int pos = 7U + b * 8U + bit;
+					unsigned int byteIdx = pos / 8U;
+					unsigned int bitIdx  = 7U - (pos % 8U);
+					if (byteIdx < 18U && (blockData[byteIdx] & (1U << bitIdx)))
+						val |= (1U << (7U - bit));
+				}
+				cfPayload[cfLen++] = val;
+			}
+		}
 	}
 
-	for (unsigned int bitOff = 1U; bitOff <= 7U; bitOff++) {
-		for (unsigned int i = 0U; i + 8U < payloadLen; i++) {
-			uint64_t window = 0ULL;
-			for (unsigned int b = 0U; b < 9U; b++)
-				window = (window << 8) | (uint64_t)payload[i + b];
+	if (cfLen > 0U)
+		CUtils::dump(2U, "P25 SA Bridge, LRRP confirmed-shifted payload (7-bit offset)", cfPayload, cfLen);
 
-			unsigned int shift = (9U * 8U) - bitOff - 32U;
-			uint32_t uA = (uint32_t)((window >> (shift)) & 0xFFFFFFFFULL);
-			shift -= 32U;
-			uint32_t uB = (uint32_t)((window >> (shift)) & 0xFFFFFFFFULL);
+	const double S32 = 360.0 / 4294967296.0;
 
-			double a = (double)(int32_t)uA * SCALE32;
-			double b2 = (double)(int32_t)uB * SCALE32;
+	const char* labels[2] = { "full", "cfmt" };
+	const unsigned char* bufs[2] = { payload, cfPayload };
+	const unsigned int lens[2] = { payloadLen, cfLen };
 
-			if (a >= 39.0 && a <= 42.0 && b2 >= -84.0 && b2 <= -80.0)
-				LogMessage("P25 SA Bridge, GPS BIT-MATCH at byte %u bit %u: lat=%.6f lon=%.6f (raw 0x%08X 0x%08X)",
-					i, bitOff, a, b2, uA, uB);
+	for (unsigned int p = 0U; p < 2U; p++) {
+		const unsigned char* buf = bufs[p];
+		unsigned int len = lens[p];
 
-			if (b2 >= 39.0 && b2 <= 42.0 && a >= -84.0 && a <= -80.0)
-				LogMessage("P25 SA Bridge, GPS BIT-MATCH (swap) at byte %u bit %u: lat=%.6f lon=%.6f (raw 0x%08X 0x%08X)",
-					i, bitOff, b2, a, uB, uA);
+		for (unsigned int i = 0U; i + 3U < len; i++) {
+			uint32_t v = ((uint32_t)buf[i] << 24) | ((uint32_t)buf[i+1U] << 16) |
+			             ((uint32_t)buf[i+2U] << 8) | (uint32_t)buf[i+3U];
+			double deg = (double)(int32_t)v * S32;
+
+			if (deg >= 39.5 && deg <= 41.5)
+				LogMessage("P25 SA Bridge, LAT candidate [%s] byte %u: %.6f (0x%08X)",
+					labels[p], i, deg, v);
+			if (deg >= -83.5 && deg <= -81.5)
+				LogMessage("P25 SA Bridge, LON candidate [%s] byte %u: %.6f (0x%08X)",
+					labels[p], i, deg, v);
+		}
+
+		for (unsigned int i = 0U; i + 3U < len; i++) {
+			uint32_t v = ((uint32_t)buf[i] << 24) | ((uint32_t)buf[i+1U] << 16) |
+			             ((uint32_t)buf[i+2U] << 8) | (uint32_t)buf[i+3U];
+			float f;
+			::memcpy(&f, &v, 4U);
+			if (f >= 39.5f && f <= 41.5f)
+				LogMessage("P25 SA Bridge, LAT float [%s] byte %u: %.6f (0x%08X)",
+					labels[p], i, (double)f, v);
+			if (f >= -83.5f && f <= -81.5f)
+				LogMessage("P25 SA Bridge, LON float [%s] byte %u: %.6f (0x%08X)",
+					labels[p], i, (double)f, v);
 		}
 	}
 }

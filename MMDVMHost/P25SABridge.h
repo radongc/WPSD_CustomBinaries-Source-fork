@@ -35,6 +35,7 @@ public:
 	void logPDUDataBlock(unsigned int sap, const unsigned char* dataBlock, unsigned int blockLen, unsigned int blockIndex);
 
 	void captureRawPDU(unsigned int sap, const unsigned char* rfPDU, unsigned int bitLength);
+	void decodeSAP31(const unsigned char* rfPDU, unsigned int bitLength);
 
 	void onVoiceEnd();
 

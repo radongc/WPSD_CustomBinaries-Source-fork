@@ -154,7 +154,7 @@ void CP25SABridge::captureRawPDU(unsigned int sap, const unsigned char* rfPDU, u
 		return;
 
 	if (m_rawValid && m_beaconActive) {
-		LogMessage("P25 SA Bridge, ignoring new SAP 31 capture (beacon already active with locked template)");
+		decodeSAP31(rfPDU, bitLength);
 		return;
 	}
 
@@ -172,6 +172,8 @@ void CP25SABridge::captureRawPDU(unsigned int sap, const unsigned char* rfPDU, u
 	m_rawValid = true;
 
 	LogMessage("P25 SA Bridge, captured raw SAP 31 PDU bitstream (%u bits, %u bytes)", bitLength, byteLen);
+
+	decodeSAP31(rfPDU, bitLength);
 
 	if (!m_beaconActive) {
 		m_beaconActive = true;
@@ -209,6 +211,71 @@ bool CP25SABridge::hasPendingPDU()
 	return false;
 }
 
+void CP25SABridge::decodeSAP31(const unsigned char* rfPDU, unsigned int bitLength)
+{
+	const unsigned int headerOffset = P25_SYNC_LENGTH_BYTES + P25_NID_LENGTH_BYTES;
+
+	CP25Trellis trellis;
+	unsigned char header[P25_PDU_HEADER_LENGTH_BYTES];
+	if (!trellis.decode12(rfPDU + headerOffset, header))
+		return;
+
+	unsigned int sap        = header[1U] & 0x3FU;
+	unsigned int mfid       = header[2U];
+	unsigned int llId       = (header[3U] << 16) | (header[4U] << 8) | header[5U];
+	unsigned int blockCount = header[6U] & 0x7FU;
+	unsigned int padCount   = (header[7U] >> 3) & 0x1FU;
+	unsigned int format     = (header[0U] >> 4) & 0x03U;
+
+	LogMessage("P25 SA Bridge, LRRP decode: SAP=%u MFID=$%02X LLId=%u fmt=%u blocks=%u pad=%u",
+		sap, mfid, llId, format, blockCount, padCount);
+
+	unsigned char payload[256U];
+	unsigned int payloadLen = 0U;
+
+	for (unsigned int i = 0U; i < blockCount && i < SA_BRIDGE_MAX_BLOCKS; i++) {
+		unsigned char blockData[P25_PDU_CONFIRMED_LENGTH_BYTES];
+		unsigned int blockOffset = headerOffset + P25_PDU_FEC_LENGTH_BYTES + i * P25_PDU_FEC_LENGTH_BYTES;
+
+		if (!trellis.decode34(rfPDU + blockOffset, blockData))
+			continue;
+
+		unsigned int copyLen = 18U;
+		if (i == blockCount - 1U && padCount > 0U && padCount < 18U)
+			copyLen = 18U - padCount;
+
+		if (payloadLen + copyLen <= 256U) {
+			::memcpy(payload + payloadLen, blockData, copyLen);
+			payloadLen += copyLen;
+		}
+	}
+
+	if (payloadLen == 0U)
+		return;
+
+	CUtils::dump(2U, "P25 SA Bridge, LRRP raw payload (AMBTc, all block bytes)", payload, payloadLen);
+
+	const double SCALE = 360.0 / 4294967296.0;
+
+	for (unsigned int i = 0U; i + 7U < payloadLen; i++) {
+		int32_t rawA = (int32_t)(((uint32_t)payload[i] << 24) | ((uint32_t)payload[i+1U] << 16) |
+		               ((uint32_t)payload[i+2U] << 8) | (uint32_t)payload[i+3U]);
+		int32_t rawB = (int32_t)(((uint32_t)payload[i+4U] << 24) | ((uint32_t)payload[i+5U] << 16) |
+		               ((uint32_t)payload[i+6U] << 8) | (uint32_t)payload[i+7U]);
+
+		double a = (double)rawA * SCALE;
+		double b = (double)rawB * SCALE;
+
+		if (a >= 20.0 && a <= 60.0 && b >= -130.0 && b <= -50.0)
+			LogMessage("P25 SA Bridge, GPS candidate at byte %u: lat=%.6f lon=%.6f (raw 0x%08X 0x%08X)",
+				i, a, b, (unsigned int)rawA, (unsigned int)rawB);
+
+		if (b >= 20.0 && b <= 60.0 && a >= -130.0 && a <= -50.0)
+			LogMessage("P25 SA Bridge, GPS candidate (swapped) at byte %u: lat=%.6f lon=%.6f (raw 0x%08X 0x%08X)",
+				i, b, a, (unsigned int)rawB, (unsigned int)rawA);
+	}
+}
+
 unsigned int CP25SABridge::getPendingPDU(unsigned char* pdu, CP25NID& nid, unsigned int& bitLength)
 {
 	bitLength = 0U;
@@ -218,63 +285,6 @@ unsigned int CP25SABridge::getPendingPDU(unsigned char* pdu, CP25NID& nid, unsig
 		m_pendingTransmit = false;
 		m_delayTimer.stop();
 		return 0U;
-	}
-
-	const unsigned int headerOffset = P25_SYNC_LENGTH_BYTES + P25_NID_LENGTH_BYTES;
-
-	CP25Trellis trellis;
-	unsigned char header[P25_PDU_HEADER_LENGTH_BYTES];
-	if (trellis.decode12(m_rawPDU + headerOffset, header)) {
-		unsigned int blockCount = header[6U] & 0x7FU;
-		unsigned int padCount   = (header[7U] >> 3) & 0x1FU;
-		CUtils::dump(2U, "P25 SA Bridge, TX header (original)", header, P25_PDU_HEADER_LENGTH_BYTES);
-		LogMessage("P25 SA Bridge, TX header: SAP=%u MFID=$%02X LLId=%u blocks=%u pad=%u",
-			header[1U] & 0x3FU, header[2U],
-			(header[3U] << 16) | (header[4U] << 8) | header[5U],
-			blockCount, padCount);
-
-		unsigned char lrrpPayload[256U];
-		unsigned int lrrpLen = 0U;
-
-		for (unsigned int i = 0U; i < blockCount; i++) {
-			unsigned char blockData[P25_PDU_CONFIRMED_LENGTH_BYTES];
-			unsigned int blockOffset = headerOffset + P25_PDU_FEC_LENGTH_BYTES + i * P25_PDU_FEC_LENGTH_BYTES;
-			if (trellis.decode34(m_rawPDU + blockOffset, blockData)) {
-				unsigned int serial = blockData[0U] >> 1;
-				CUtils::dump(2U, "P25 SA Bridge, TX block (real)", blockData, P25_PDU_CONFIRMED_LENGTH_BYTES);
-				LogMessage("P25 SA Bridge, TX block %u serial=%u", i, serial);
-
-				unsigned int dataBytes = 16U;
-				if (i == blockCount - 1U && padCount > 0U)
-					dataBytes = (padCount < 16U) ? 16U - padCount : 0U;
-				if (lrrpLen + dataBytes <= 256U) {
-					for (unsigned int b = 0U; b < dataBytes; b++) {
-						unsigned int srcBit = 7U + b * 8U;
-						unsigned int srcByte = srcBit / 8U;
-						unsigned int srcShift = 7U - (srcBit % 8U);
-						unsigned char val = 0U;
-						for (unsigned int bit = 0U; bit < 8U; bit++) {
-							unsigned int pos = 7U + b * 8U + bit;
-							unsigned int byteIdx = pos / 8U;
-							unsigned int bitIdx  = 7U - (pos % 8U);
-							if (byteIdx < 18U && (blockData[byteIdx] & (1U << bitIdx)))
-								val |= (1U << (7U - bit));
-						}
-						lrrpPayload[lrrpLen++] = val;
-					}
-				}
-			} else {
-				LogMessage("P25 SA Bridge, TX block %u trellis decode FAILED", i);
-			}
-		}
-
-		if (lrrpLen > 0U) {
-			CUtils::dump(2U, "P25 SA Bridge, LRRP payload (extracted)", lrrpPayload, lrrpLen);
-			if (lrrpLen >= 3U)
-				LogMessage("P25 SA Bridge, LRRP source RID (first 3 bytes): %u (0x%02X%02X%02X)",
-					(lrrpPayload[0U] << 16) | (lrrpPayload[1U] << 8) | lrrpPayload[2U],
-					lrrpPayload[0U], lrrpPayload[1U], lrrpPayload[2U]);
-		}
 	}
 
 	::memset(pdu, 0x00U, 600U);
@@ -292,8 +302,7 @@ unsigned int CP25SABridge::getPendingPDU(unsigned char* pdu, CP25NID& nid, unsig
 
 	bitLength = airBitLength;
 
-	LogMessage("P25 SA Bridge, transmitting FULL SAP 31 PDU (%u air bytes, %u raw bits)",
-		airByteLength, m_rawBitLength);
+	LogMessage("P25 SA Bridge, transmitting SAP 31 PDU (%u air bytes)", airByteLength);
 
 	m_pendingTransmit = false;
 	m_gpsValid = false;

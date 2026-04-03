@@ -255,24 +255,48 @@ void CP25SABridge::decodeSAP31(const unsigned char* rfPDU, unsigned int bitLengt
 
 	CUtils::dump(2U, "P25 SA Bridge, LRRP raw payload (AMBTc, all block bytes)", payload, payloadLen);
 
-	const double SCALE = 360.0 / 4294967296.0;
+	const double SCALE32 = 360.0 / 4294967296.0;
 
 	for (unsigned int i = 0U; i + 7U < payloadLen; i++) {
-		int32_t rawA = (int32_t)(((uint32_t)payload[i] << 24) | ((uint32_t)payload[i+1U] << 16) |
-		               ((uint32_t)payload[i+2U] << 8) | (uint32_t)payload[i+3U]);
-		int32_t rawB = (int32_t)(((uint32_t)payload[i+4U] << 24) | ((uint32_t)payload[i+5U] << 16) |
-		               ((uint32_t)payload[i+6U] << 8) | (uint32_t)payload[i+7U]);
+		uint32_t uA = ((uint32_t)payload[i] << 24) | ((uint32_t)payload[i+1U] << 16) |
+		              ((uint32_t)payload[i+2U] << 8) | (uint32_t)payload[i+3U];
+		uint32_t uB = ((uint32_t)payload[i+4U] << 24) | ((uint32_t)payload[i+5U] << 16) |
+		              ((uint32_t)payload[i+6U] << 8) | (uint32_t)payload[i+7U];
 
-		double a = (double)rawA * SCALE;
-		double b = (double)rawB * SCALE;
+		double a = (double)(int32_t)uA * SCALE32;
+		double b = (double)(int32_t)uB * SCALE32;
 
-		if (a >= 20.0 && a <= 60.0 && b >= -130.0 && b <= -50.0)
-			LogMessage("P25 SA Bridge, GPS candidate at byte %u: lat=%.6f lon=%.6f (raw 0x%08X 0x%08X)",
-				i, a, b, (unsigned int)rawA, (unsigned int)rawB);
+		if (a >= 39.0 && a <= 42.0 && b >= -84.0 && b <= -80.0)
+			LogMessage("P25 SA Bridge, GPS MATCH at byte %u: lat=%.6f lon=%.6f (raw 0x%08X 0x%08X)",
+				i, a, b, uA, uB);
 
-		if (b >= 20.0 && b <= 60.0 && a >= -130.0 && a <= -50.0)
-			LogMessage("P25 SA Bridge, GPS candidate (swapped) at byte %u: lat=%.6f lon=%.6f (raw 0x%08X 0x%08X)",
-				i, b, a, (unsigned int)rawB, (unsigned int)rawA);
+		if (b >= 39.0 && b <= 42.0 && a >= -84.0 && a <= -80.0)
+			LogMessage("P25 SA Bridge, GPS MATCH (swapped) at byte %u: lat=%.6f lon=%.6f (raw 0x%08X 0x%08X)",
+				i, b, a, uB, uA);
+	}
+
+	for (unsigned int bitOff = 1U; bitOff <= 7U; bitOff++) {
+		for (unsigned int i = 0U; i + 8U < payloadLen; i++) {
+			uint64_t window = 0ULL;
+			for (unsigned int b = 0U; b < 9U; b++)
+				window = (window << 8) | (uint64_t)payload[i + b];
+
+			unsigned int shift = (9U * 8U) - bitOff - 32U;
+			uint32_t uA = (uint32_t)((window >> (shift)) & 0xFFFFFFFFULL);
+			shift -= 32U;
+			uint32_t uB = (uint32_t)((window >> (shift)) & 0xFFFFFFFFULL);
+
+			double a = (double)(int32_t)uA * SCALE32;
+			double b2 = (double)(int32_t)uB * SCALE32;
+
+			if (a >= 39.0 && a <= 42.0 && b2 >= -84.0 && b2 <= -80.0)
+				LogMessage("P25 SA Bridge, GPS BIT-MATCH at byte %u bit %u: lat=%.6f lon=%.6f (raw 0x%08X 0x%08X)",
+					i, bitOff, a, b2, uA, uB);
+
+			if (b2 >= 39.0 && b2 <= 42.0 && a >= -84.0 && a <= -80.0)
+				LogMessage("P25 SA Bridge, GPS BIT-MATCH (swap) at byte %u bit %u: lat=%.6f lon=%.6f (raw 0x%08X 0x%08X)",
+					i, bitOff, b2, a, uB, uA);
+		}
 	}
 }
 

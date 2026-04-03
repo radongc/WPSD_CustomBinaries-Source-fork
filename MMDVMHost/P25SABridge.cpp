@@ -284,40 +284,91 @@ void CP25SABridge::decodeSAP31(const unsigned char* rfPDU, unsigned int bitLengt
 		CUtils::dump(2U, "P25 SA Bridge, LRRP confirmed-shifted payload (7-bit offset)", cfPayload, cfLen);
 
 	const double S32 = 360.0 / 4294967296.0;
+	const double targetLat = 40.443;
+	const double targetLon = -82.443;
+	const double tolerance = 0.5;
 
-	const char* labels[2] = { "full", "cfmt" };
-	const unsigned char* bufs[2] = { payload, cfPayload };
-	const unsigned int lens[2] = { payloadLen, cfLen };
+	for (unsigned int i = 0U; i + 3U < payloadLen; i++) {
+		uint32_t v = ((uint32_t)payload[i] << 24) | ((uint32_t)payload[i+1U] << 16) |
+		             ((uint32_t)payload[i+2U] << 8) | (uint32_t)payload[i+3U];
 
-	for (unsigned int p = 0U; p < 2U; p++) {
-		const unsigned char* buf = bufs[p];
-		unsigned int len = lens[p];
+		double d1 = (double)(int32_t)v * S32;
+		if ((d1 >= targetLat - tolerance && d1 <= targetLat + tolerance) ||
+		    (d1 >= targetLon - tolerance && d1 <= targetLon + tolerance))
+			LogMessage("P25 SA Bridge, 32-bit 360/2^32 byte %u: %.6f (0x%08X)", i, d1, v);
 
-		for (unsigned int i = 0U; i + 3U < len; i++) {
-			uint32_t v = ((uint32_t)buf[i] << 24) | ((uint32_t)buf[i+1U] << 16) |
-			             ((uint32_t)buf[i+2U] << 8) | (uint32_t)buf[i+3U];
-			double deg = (double)(int32_t)v * S32;
+		double d2 = (double)(int32_t)v / 100000.0;
+		if ((d2 >= targetLat - tolerance && d2 <= targetLat + tolerance) ||
+		    (d2 >= targetLon - tolerance && d2 <= targetLon + tolerance))
+			LogMessage("P25 SA Bridge, 32-bit deg*1e5 byte %u: %.6f (0x%08X)", i, d2, v);
 
-			if (deg >= 39.5 && deg <= 41.5)
-				LogMessage("P25 SA Bridge, LAT candidate [%s] byte %u: %.6f (0x%08X)",
-					labels[p], i, deg, v);
-			if (deg >= -83.5 && deg <= -81.5)
-				LogMessage("P25 SA Bridge, LON candidate [%s] byte %u: %.6f (0x%08X)",
-					labels[p], i, deg, v);
-		}
+		double d3 = (double)(int32_t)v / 1000000.0;
+		if ((d3 >= targetLat - tolerance && d3 <= targetLat + tolerance) ||
+		    (d3 >= targetLon - tolerance && d3 <= targetLon + tolerance))
+			LogMessage("P25 SA Bridge, 32-bit deg*1e6 byte %u: %.6f (0x%08X)", i, d3, v);
 
-		for (unsigned int i = 0U; i + 3U < len; i++) {
-			uint32_t v = ((uint32_t)buf[i] << 24) | ((uint32_t)buf[i+1U] << 16) |
-			             ((uint32_t)buf[i+2U] << 8) | (uint32_t)buf[i+3U];
-			float f;
-			::memcpy(&f, &v, 4U);
-			if (f >= 39.5f && f <= 41.5f)
-				LogMessage("P25 SA Bridge, LAT float [%s] byte %u: %.6f (0x%08X)",
-					labels[p], i, (double)f, v);
-			if (f >= -83.5f && f <= -81.5f)
-				LogMessage("P25 SA Bridge, LON float [%s] byte %u: %.6f (0x%08X)",
-					labels[p], i, (double)f, v);
-		}
+		double d4 = (double)(int32_t)v / 10000000.0;
+		if ((d4 >= targetLat - tolerance && d4 <= targetLat + tolerance) ||
+		    (d4 >= targetLon - tolerance && d4 <= targetLon + tolerance))
+			LogMessage("P25 SA Bridge, 32-bit deg*1e7 byte %u: %.6f (0x%08X)", i, d4, v);
+
+		double d5 = (double)(int32_t)v / 3600000.0;
+		if ((d5 >= targetLat - tolerance && d5 <= targetLat + tolerance) ||
+		    (d5 >= targetLon - tolerance && d5 <= targetLon + tolerance))
+			LogMessage("P25 SA Bridge, 32-bit milliarcsec byte %u: %.6f (0x%08X)", i, d5, v);
+
+		float f;
+		::memcpy(&f, &v, 4U);
+		if ((f >= targetLat - tolerance && f <= targetLat + tolerance) ||
+		    (f >= targetLon - tolerance && f <= targetLon + tolerance))
+			LogMessage("P25 SA Bridge, 32-bit float byte %u: %.6f (0x%08X)", i, (double)f, v);
+
+		uint32_t vLE = ((uint32_t)payload[i+3U] << 24) | ((uint32_t)payload[i+2U] << 16) |
+		               ((uint32_t)payload[i+1U] << 8) | (uint32_t)payload[i];
+		double d6 = (double)(int32_t)vLE * S32;
+		if ((d6 >= targetLat - tolerance && d6 <= targetLat + tolerance) ||
+		    (d6 >= targetLon - tolerance && d6 <= targetLon + tolerance))
+			LogMessage("P25 SA Bridge, 32-bit 360/2^32 LE byte %u: %.6f (0x%08X)", i, d6, vLE);
+	}
+
+	for (unsigned int i = 0U; i + 7U < payloadLen; i++) {
+		uint64_t v = 0ULL;
+		for (unsigned int b = 0U; b < 8U; b++)
+			v = (v << 8) | (uint64_t)payload[i + b];
+		double d;
+		::memcpy(&d, &v, 8U);
+		if ((d >= targetLat - tolerance && d <= targetLat + tolerance) ||
+		    (d >= targetLon - tolerance && d <= targetLon + tolerance))
+			LogMessage("P25 SA Bridge, 64-bit double byte %u: %.6f", i, d);
+
+		uint64_t vLE = 0ULL;
+		for (unsigned int b = 0U; b < 8U; b++)
+			vLE = (vLE << 8) | (uint64_t)payload[i + 7U - b];
+		double dLE;
+		::memcpy(&dLE, &vLE, 8U);
+		if ((dLE >= targetLat - tolerance && dLE <= targetLat + tolerance) ||
+		    (dLE >= targetLon - tolerance && dLE <= targetLon + tolerance))
+			LogMessage("P25 SA Bridge, 64-bit double LE byte %u: %.6f", i, dLE);
+	}
+
+	for (unsigned int i = 0U; i + 2U < payloadLen; i++) {
+		uint32_t v24 = ((uint32_t)payload[i] << 16) | ((uint32_t)payload[i+1U] << 8) | (uint32_t)payload[i+2U];
+		int32_t s24 = (v24 & 0x800000U) ? (int32_t)(v24 | 0xFF000000U) : (int32_t)v24;
+
+		double d7 = (double)s24 * (360.0 / 16777216.0);
+		if ((d7 >= targetLat - tolerance && d7 <= targetLat + tolerance) ||
+		    (d7 >= targetLon - tolerance && d7 <= targetLon + tolerance))
+			LogMessage("P25 SA Bridge, 24-bit 360/2^24 byte %u: %.6f (0x%06X)", i, d7, v24);
+
+		double d8 = (double)s24 / 1000.0;
+		if ((d8 >= targetLat - tolerance && d8 <= targetLat + tolerance) ||
+		    (d8 >= targetLon - tolerance && d8 <= targetLon + tolerance))
+			LogMessage("P25 SA Bridge, 24-bit millideg byte %u: %.6f (0x%06X)", i, d8, v24);
+
+		double d9 = (double)s24 / 10000.0;
+		if ((d9 >= targetLat - tolerance && d9 <= targetLat + tolerance) ||
+		    (d9 >= targetLon - tolerance && d9 <= targetLon + tolerance))
+			LogMessage("P25 SA Bridge, 24-bit deg*1e4 byte %u: %.6f (0x%06X)", i, d9, v24);
 	}
 }
 

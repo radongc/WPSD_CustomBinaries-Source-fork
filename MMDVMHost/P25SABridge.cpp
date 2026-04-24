@@ -57,12 +57,14 @@ m_templateValid(false),
 m_templateBlockCount(0U),
 m_firstCapValid(false),
 m_firstCapLen(0U),
-m_firstCapCfLen(0U)
+m_firstCapCfLen(0U),
+m_capCount(0U)
 {
 	::memset(m_rawPDU, 0x00U, 300U);
 	::memset(m_templateHeader, 0x00U, 12U);
 	::memset(m_firstCapPayload, 0x00U, 256U);
 	::memset(m_firstCapCfPayload, 0x00U, 256U);
+	::memset(m_stableCfMask, 0x01U, 256U);
 	for (unsigned int i = 0U; i < SA_BRIDGE_MAX_BLOCKS; i++) {
 		::memset(m_templateBlocks[i], 0x00U, 18U);
 		m_templateBlockConfirmed[i] = true;
@@ -354,12 +356,66 @@ void CP25SABridge::decodeSAP31(const unsigned char* rfPDU, unsigned int bitLengt
 			m_firstCapCfLen = cfLen;
 		}
 		m_firstCapValid = true;
+		m_capCount = 1U;
 		LogMessage("P25 SA Bridge, stored first SAP 31 capture as diff reference "
 		           "(%u full-block / %u cf-shifted bytes) - move radio and beacon again to locate GPS fields",
 		           payloadLen, cfLen);
 	} else {
 		diffAgainstFirst("full-block", payload, payloadLen, m_firstCapPayload, m_firstCapLen);
 		diffAgainstFirst("cf-shifted", cfPayload, cfLen, m_firstCapCfPayload, m_firstCapCfLen);
+
+		unsigned int cmpLen = cfLen < m_firstCapCfLen ? cfLen : m_firstCapCfLen;
+		for (unsigned int i = 0U; i < cmpLen && i < 256U; i++) {
+			if (cfPayload[i] != m_firstCapCfPayload[i])
+				m_stableCfMask[i] = 0U;
+		}
+		m_capCount++;
+
+		unsigned int stableCount = 0U;
+		unsigned int varCount = 0U;
+		char stableLine[640U];
+		char varLine[640U];
+		unsigned int sp = 0U, vp = 0U;
+		for (unsigned int i = 0U; i < cmpLen && i < 256U; i++) {
+			if (m_stableCfMask[i]) {
+				if (sp < 630U)
+					sp += (unsigned int)::snprintf(stableLine + sp, 640U - sp, "%u ", i);
+				stableCount++;
+			} else {
+				if (vp < 630U)
+					vp += (unsigned int)::snprintf(varLine + vp, 640U - vp, "%u ", i);
+				varCount++;
+			}
+		}
+		stableLine[sp] = '\0';
+		varLine[vp] = '\0';
+
+		LogMessage("P25 SA Bridge, stability map after %u captures: %u stable / %u variable bytes (cf-shifted)",
+		           m_capCount, stableCount, varCount);
+		LogMessage("P25 SA Bridge, STABLE cf-shifted byte offsets: %s", stableLine);
+		LogMessage("P25 SA Bridge, VARIABLE cf-shifted byte offsets: %s", varLine);
+
+		unsigned int longestRun = 0U;
+		unsigned int runStart = 0U;
+		unsigned int curRunLen = 0U;
+		unsigned int curRunStart = 0U;
+		for (unsigned int i = 0U; i < cmpLen && i < 256U; i++) {
+			if (!m_stableCfMask[i]) {
+				if (curRunLen == 0U)
+					curRunStart = i;
+				curRunLen++;
+				if (curRunLen > longestRun) {
+					longestRun = curRunLen;
+					runStart = curRunStart;
+				}
+			} else {
+				curRunLen = 0U;
+			}
+		}
+		if (longestRun >= 4U)
+			LogMessage("P25 SA Bridge, longest variable run: %u bytes starting at cf-shifted offset %u "
+			           "(if >16 bytes, probably encrypted/HMAC; if 4-8 bytes, candidate lat/lon field)",
+			           longestRun, runStart);
 	}
 
 	parseLRRP(cfPayload, cfLen);

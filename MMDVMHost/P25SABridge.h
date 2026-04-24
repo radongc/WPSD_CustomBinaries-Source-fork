@@ -78,6 +78,9 @@ private:
 	unsigned char m_firstCapPayload[256U];
 	unsigned int  m_firstCapCfLen;
 	unsigned char m_firstCapCfPayload[256U];
+
+	unsigned int  m_capCount;
+	unsigned char m_stableCfMask[256U];
 };
 
 #endif

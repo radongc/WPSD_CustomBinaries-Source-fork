@@ -36,6 +36,9 @@ public:
 
 	void captureRawPDU(unsigned int sap, const unsigned char* rfPDU, unsigned int bitLength);
 	void decodeSAP31(const unsigned char* rfPDU, unsigned int bitLength);
+	void diffAgainstFirst(const char* label, const unsigned char* cur, unsigned int curLen,
+	                      const unsigned char* first, unsigned int firstLen);
+	void parseLRRP(const unsigned char* data, unsigned int len);
 
 	void onVoiceEnd();
 
@@ -69,6 +72,12 @@ private:
 	unsigned char m_templateHeader[12U];
 	unsigned char m_templateBlocks[SA_BRIDGE_MAX_BLOCKS][18U];
 	bool          m_templateBlockConfirmed[SA_BRIDGE_MAX_BLOCKS];
+
+	bool          m_firstCapValid;
+	unsigned int  m_firstCapLen;
+	unsigned char m_firstCapPayload[256U];
+	unsigned int  m_firstCapCfLen;
+	unsigned char m_firstCapCfPayload[256U];
 };
 
 #endif

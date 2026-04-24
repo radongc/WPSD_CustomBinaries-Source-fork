@@ -38,6 +38,7 @@
 
 #include <cstdint>
 #include <cstring>
+#include <cstdio>
 #include <cmath>
 
 CP25SABridge::CP25SABridge(unsigned int delayMs) :
@@ -53,10 +54,15 @@ m_rawBitLength(0U),
 m_beaconTimer(1000U, 10U, 0U),
 m_beaconActive(false),
 m_templateValid(false),
-m_templateBlockCount(0U)
+m_templateBlockCount(0U),
+m_firstCapValid(false),
+m_firstCapLen(0U),
+m_firstCapCfLen(0U)
 {
 	::memset(m_rawPDU, 0x00U, 300U);
 	::memset(m_templateHeader, 0x00U, 12U);
+	::memset(m_firstCapPayload, 0x00U, 256U);
+	::memset(m_firstCapCfPayload, 0x00U, 256U);
 	for (unsigned int i = 0U; i < SA_BRIDGE_MAX_BLOCKS; i++) {
 		::memset(m_templateBlocks[i], 0x00U, 18U);
 		m_templateBlockConfirmed[i] = true;
@@ -338,93 +344,139 @@ void CP25SABridge::decodeSAP31(const unsigned char* rfPDU, unsigned int bitLengt
 		}
 	}
 
-	const double S32 = 360.0 / 4294967296.0;
-	const double targetLat = 40.443;
-	const double targetLon = -82.443;
-	const double tolerance = 0.5;
-
-	for (unsigned int i = 0U; i + 3U < payloadLen; i++) {
-		uint32_t v = ((uint32_t)payload[i] << 24) | ((uint32_t)payload[i+1U] << 16) |
-		             ((uint32_t)payload[i+2U] << 8) | (uint32_t)payload[i+3U];
-
-		double d1 = (double)(int32_t)v * S32;
-		if ((d1 >= targetLat - tolerance && d1 <= targetLat + tolerance) ||
-		    (d1 >= targetLon - tolerance && d1 <= targetLon + tolerance))
-			LogMessage("P25 SA Bridge, 32-bit 360/2^32 byte %u: %.6f (0x%08X)", i, d1, v);
-
-		double d2 = (double)(int32_t)v / 100000.0;
-		if ((d2 >= targetLat - tolerance && d2 <= targetLat + tolerance) ||
-		    (d2 >= targetLon - tolerance && d2 <= targetLon + tolerance))
-			LogMessage("P25 SA Bridge, 32-bit deg*1e5 byte %u: %.6f (0x%08X)", i, d2, v);
-
-		double d3 = (double)(int32_t)v / 1000000.0;
-		if ((d3 >= targetLat - tolerance && d3 <= targetLat + tolerance) ||
-		    (d3 >= targetLon - tolerance && d3 <= targetLon + tolerance))
-			LogMessage("P25 SA Bridge, 32-bit deg*1e6 byte %u: %.6f (0x%08X)", i, d3, v);
-
-		double d4 = (double)(int32_t)v / 10000000.0;
-		if ((d4 >= targetLat - tolerance && d4 <= targetLat + tolerance) ||
-		    (d4 >= targetLon - tolerance && d4 <= targetLon + tolerance))
-			LogMessage("P25 SA Bridge, 32-bit deg*1e7 byte %u: %.6f (0x%08X)", i, d4, v);
-
-		double d5 = (double)(int32_t)v / 3600000.0;
-		if ((d5 >= targetLat - tolerance && d5 <= targetLat + tolerance) ||
-		    (d5 >= targetLon - tolerance && d5 <= targetLon + tolerance))
-			LogMessage("P25 SA Bridge, 32-bit milliarcsec byte %u: %.6f (0x%08X)", i, d5, v);
-
-		float f;
-		::memcpy(&f, &v, 4U);
-		if ((f >= targetLat - tolerance && f <= targetLat + tolerance) ||
-		    (f >= targetLon - tolerance && f <= targetLon + tolerance))
-			LogMessage("P25 SA Bridge, 32-bit float byte %u: %.6f (0x%08X)", i, (double)f, v);
-
-		uint32_t vLE = ((uint32_t)payload[i+3U] << 24) | ((uint32_t)payload[i+2U] << 16) |
-		               ((uint32_t)payload[i+1U] << 8) | (uint32_t)payload[i];
-		double d6 = (double)(int32_t)vLE * S32;
-		if ((d6 >= targetLat - tolerance && d6 <= targetLat + tolerance) ||
-		    (d6 >= targetLon - tolerance && d6 <= targetLon + tolerance))
-			LogMessage("P25 SA Bridge, 32-bit 360/2^32 LE byte %u: %.6f (0x%08X)", i, d6, vLE);
+	if (!m_firstCapValid) {
+		if (payloadLen <= 256U) {
+			::memcpy(m_firstCapPayload, payload, payloadLen);
+			m_firstCapLen = payloadLen;
+		}
+		if (cfLen <= 256U) {
+			::memcpy(m_firstCapCfPayload, cfPayload, cfLen);
+			m_firstCapCfLen = cfLen;
+		}
+		m_firstCapValid = true;
+		LogMessage("P25 SA Bridge, stored first SAP 31 capture as diff reference "
+		           "(%u full-block / %u cf-shifted bytes) - move radio and beacon again to locate GPS fields",
+		           payloadLen, cfLen);
+	} else {
+		diffAgainstFirst("full-block", payload, payloadLen, m_firstCapPayload, m_firstCapLen);
+		diffAgainstFirst("cf-shifted", cfPayload, cfLen, m_firstCapCfPayload, m_firstCapCfLen);
 	}
 
-	for (unsigned int i = 0U; i + 7U < payloadLen; i++) {
-		uint64_t v = 0ULL;
-		for (unsigned int b = 0U; b < 8U; b++)
-			v = (v << 8) | (uint64_t)payload[i + b];
-		double d;
-		::memcpy(&d, &v, 8U);
-		if ((d >= targetLat - tolerance && d <= targetLat + tolerance) ||
-		    (d >= targetLon - tolerance && d <= targetLon + tolerance))
-			LogMessage("P25 SA Bridge, 64-bit double byte %u: %.6f", i, d);
+	parseLRRP(cfPayload, cfLen);
+}
 
-		uint64_t vLE = 0ULL;
-		for (unsigned int b = 0U; b < 8U; b++)
-			vLE = (vLE << 8) | (uint64_t)payload[i + 7U - b];
-		double dLE;
-		::memcpy(&dLE, &vLE, 8U);
-		if ((dLE >= targetLat - tolerance && dLE <= targetLat + tolerance) ||
-		    (dLE >= targetLon - tolerance && dLE <= targetLon + tolerance))
-			LogMessage("P25 SA Bridge, 64-bit double LE byte %u: %.6f", i, dLE);
+void CP25SABridge::diffAgainstFirst(const char* label, const unsigned char* cur, unsigned int curLen,
+                                    const unsigned char* first, unsigned int firstLen)
+{
+	unsigned int cmpLen = curLen < firstLen ? curLen : firstLen;
+	if (cmpLen == 0U)
+		return;
+
+	char line[640U];
+	unsigned int pos = 0U;
+	unsigned int changes = 0U;
+
+	for (unsigned int i = 0U; i < cmpLen && pos < 620U; i++) {
+		if (cur[i] != first[i]) {
+			int n = ::snprintf(line + pos, 640U - pos, " [%u:%02X->%02X]",
+			                   i, first[i], cur[i]);
+			if (n > 0)
+				pos += (unsigned int)n;
+			changes++;
+		}
+	}
+	line[pos] = '\0';
+
+	if (changes == 0U)
+		LogMessage("P25 SA Bridge, %s payload IDENTICAL to first capture (%u bytes) - radio hasn't moved",
+		           label, cmpLen);
+	else
+		LogMessage("P25 SA Bridge, %s payload diff vs first (%u/%u bytes changed):%s",
+		           label, changes, cmpLen, line);
+}
+
+void CP25SABridge::parseLRRP(const unsigned char* data, unsigned int len)
+{
+	if (len < 6U)
+		return;
+
+	unsigned int off = 0U;
+	while (off < len && data[off] != 0x24U)
+		off++;
+
+	if (off >= len) {
+		LogMessage("P25 SA Bridge, LRRP parse: no '$' start marker found in cf-shifted payload");
+		return;
 	}
 
-	for (unsigned int i = 0U; i + 2U < payloadLen; i++) {
-		uint32_t v24 = ((uint32_t)payload[i] << 16) | ((uint32_t)payload[i+1U] << 8) | (uint32_t)payload[i+2U];
-		int32_t s24 = (v24 & 0x800000U) ? (int32_t)(v24 | 0xFF000000U) : (int32_t)v24;
+	LogMessage("P25 SA Bridge, LRRP parse: '$' start marker at cf-shifted offset %u", off);
 
-		double d7 = (double)s24 * (360.0 / 16777216.0);
-		if ((d7 >= targetLat - tolerance && d7 <= targetLat + tolerance) ||
-		    (d7 >= targetLon - tolerance && d7 <= targetLon + tolerance))
-			LogMessage("P25 SA Bridge, 24-bit 360/2^24 byte %u: %.6f (0x%06X)", i, d7, v24);
+	// Hypothesis: [0x24] [msgType] [topTag] [topLen] [value bytes ...]
+	if (off + 4U >= len)
+		return;
 
-		double d8 = (double)s24 / 1000.0;
-		if ((d8 >= targetLat - tolerance && d8 <= targetLat + tolerance) ||
-		    (d8 >= targetLon - tolerance && d8 <= targetLon + tolerance))
-			LogMessage("P25 SA Bridge, 24-bit millideg byte %u: %.6f (0x%06X)", i, d8, v24);
+	unsigned char msgType = data[off + 1U];
+	unsigned char topTag  = data[off + 2U];
+	unsigned char topLen  = data[off + 3U];
 
-		double d9 = (double)s24 / 10000.0;
-		if ((d9 >= targetLat - tolerance && d9 <= targetLat + tolerance) ||
-		    (d9 >= targetLon - tolerance && d9 <= targetLon + tolerance))
-			LogMessage("P25 SA Bridge, 24-bit deg*1e4 byte %u: %.6f (0x%06X)", i, d9, v24);
+	LogMessage("P25 SA Bridge, LRRP header: msgType=0x%02X topTag=0x%02X topLen=%u (0x%02X)",
+	           msgType, topTag, topLen, topLen);
+
+	unsigned int innerStart = off + 4U;
+	unsigned int innerEnd   = innerStart + topLen;
+	if (innerEnd > len)
+		innerEnd = len;
+
+	// Walk as 1-byte-tag / 1-byte-len TLVs
+	unsigned int cur = innerStart;
+	unsigned int tlvCount = 0U;
+	while (cur + 2U <= innerEnd && tlvCount < 32U) {
+		unsigned char t = data[cur];
+		unsigned char l = data[cur + 1U];
+
+		if (l == 0U) {
+			cur++;
+			continue;
+		}
+		if (cur + 2U + l > innerEnd)
+			break;
+
+		char hex[80U];
+		unsigned int hp = 0U;
+		unsigned int show = l < 16U ? l : 16U;
+		for (unsigned int i = 0U; i < show && hp < 72U; i++)
+			hp += (unsigned int)::snprintf(hex + hp, 80U - hp, "%02X ", data[cur + 2U + i]);
+		hex[hp] = '\0';
+
+		if (l == 4U) {
+			uint32_t v = ((uint32_t)data[cur+2U] << 24) | ((uint32_t)data[cur+3U] << 16) |
+			             ((uint32_t)data[cur+4U] << 8)  |  (uint32_t)data[cur+5U];
+			double as2p32 = (double)(int32_t)v * (360.0 / 4294967296.0);
+			double asE7   = (double)(int32_t)v / 1e7;
+			LogMessage("P25 SA Bridge, LRRP TLV @%u tag=0x%02X len=%u val=%s "
+			           "[int32=%d  360/2^32=%.6f  deg*1e7=%.6f]",
+			           cur, t, l, hex, (int32_t)v, as2p32, asE7);
+		} else if (l == 8U) {
+			uint32_t hi = ((uint32_t)data[cur+2U] << 24) | ((uint32_t)data[cur+3U] << 16) |
+			              ((uint32_t)data[cur+4U] << 8)  |  (uint32_t)data[cur+5U];
+			uint32_t lo = ((uint32_t)data[cur+6U] << 24) | ((uint32_t)data[cur+7U] << 16) |
+			              ((uint32_t)data[cur+8U] << 8)  |  (uint32_t)data[cur+9U];
+			double dLat = (double)(int32_t)hi * (360.0 / 4294967296.0);
+			double dLon = (double)(int32_t)lo * (360.0 / 4294967296.0);
+			LogMessage("P25 SA Bridge, LRRP TLV @%u tag=0x%02X len=%u val=%s "
+			           "[as 2x32b 360/2^32: lat=%.6f lon=%.6f]",
+			           cur, t, l, hex, dLat, dLon);
+		} else {
+			LogMessage("P25 SA Bridge, LRRP TLV @%u tag=0x%02X len=%u val=%s%s",
+			           cur, t, l, hex, l > 16U ? "..." : "");
+		}
+
+		cur += 2U + l;
+		tlvCount++;
 	}
+
+	LogMessage("P25 SA Bridge, LRRP parse: walked %u TLVs in top value (%u..%u), stopped at %u",
+	           tlvCount, innerStart, innerEnd, cur);
 }
 
 unsigned int CP25SABridge::getPendingPDU(unsigned char* pdu, CP25NID& nid, unsigned int& bitLength)

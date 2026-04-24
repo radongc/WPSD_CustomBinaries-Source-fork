@@ -255,6 +255,34 @@ void CP25SABridge::decodeSAP31(const unsigned char* rfPDU, unsigned int bitLengt
 
 	CUtils::dump(2U, "P25 SA Bridge, LRRP raw payload (full block bytes)", payload, payloadLen);
 
+	{
+		char ascii[257U];
+		unsigned int n = payloadLen < 256U ? payloadLen : 256U;
+		for (unsigned int i = 0U; i < n; i++) {
+			unsigned char c = payload[i];
+			ascii[i] = (c >= 0x20U && c <= 0x7EU) ? (char)c : '.';
+		}
+		ascii[n] = '\0';
+		LogMessage("P25 SA Bridge, LRRP raw payload ASCII: \"%s\"", ascii);
+
+		for (unsigned int i = 0U; i + 5U < payloadLen; i++) {
+			if (payload[i] == '$' && payload[i+1U] >= 'A' && payload[i+1U] <= 'Z' &&
+			    payload[i+2U] >= 'A' && payload[i+2U] <= 'Z') {
+				char nmea[128U];
+				unsigned int j = 0U;
+				while (j < 127U && i + j < payloadLen) {
+					unsigned char c = payload[i + j];
+					if (c == '\r' || c == '\n' || c < 0x20U || c > 0x7EU)
+						break;
+					nmea[j] = (char)c;
+					j++;
+				}
+				nmea[j] = '\0';
+				LogMessage("P25 SA Bridge, NMEA candidate at byte %u (full-block): %s", i, nmea);
+			}
+		}
+	}
+
 	unsigned char cfPayload[256U];
 	unsigned int cfLen = 0U;
 	for (unsigned int i = 0U; i < blockCount && i < SA_BRIDGE_MAX_BLOCKS; i++) {
@@ -280,8 +308,35 @@ void CP25SABridge::decodeSAP31(const unsigned char* rfPDU, unsigned int bitLengt
 		}
 	}
 
-	if (cfLen > 0U)
+	if (cfLen > 0U) {
 		CUtils::dump(2U, "P25 SA Bridge, LRRP confirmed-shifted payload (7-bit offset)", cfPayload, cfLen);
+
+		char ascii[257U];
+		unsigned int n = cfLen < 256U ? cfLen : 256U;
+		for (unsigned int i = 0U; i < n; i++) {
+			unsigned char c = cfPayload[i];
+			ascii[i] = (c >= 0x20U && c <= 0x7EU) ? (char)c : '.';
+		}
+		ascii[n] = '\0';
+		LogMessage("P25 SA Bridge, LRRP confirmed-shifted payload ASCII: \"%s\"", ascii);
+
+		for (unsigned int i = 0U; i + 5U < cfLen; i++) {
+			if (cfPayload[i] == '$' && cfPayload[i+1U] >= 'A' && cfPayload[i+1U] <= 'Z' &&
+			    cfPayload[i+2U] >= 'A' && cfPayload[i+2U] <= 'Z') {
+				char nmea[128U];
+				unsigned int j = 0U;
+				while (j < 127U && i + j < cfLen) {
+					unsigned char c = cfPayload[i + j];
+					if (c == '\r' || c == '\n' || c < 0x20U || c > 0x7EU)
+						break;
+					nmea[j] = (char)c;
+					j++;
+				}
+				nmea[j] = '\0';
+				LogMessage("P25 SA Bridge, NMEA candidate at byte %u (cf-shifted): %s", i, nmea);
+			}
+		}
+	}
 
 	const double S32 = 360.0 / 4294967296.0;
 	const double targetLat = 40.443;

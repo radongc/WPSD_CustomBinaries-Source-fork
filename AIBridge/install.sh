@@ -38,8 +38,11 @@ if [ ! -d /opt/whisper.cpp ]; then
     git clone --depth 1 https://github.com/ggml-org/whisper.cpp.git /opt/whisper.cpp
 fi
 ( cd /opt/whisper.cpp
-  if [ ! -x main ]; then
-      make -j"$(nproc)" main
+  # whisper.cpp uses cmake now (the old `make main` target was removed).
+  # The binary lands at build/bin/whisper-cli.
+  if [ ! -x build/bin/whisper-cli ]; then
+      cmake -B build -DCMAKE_BUILD_TYPE=Release
+      cmake --build build -j"$(nproc)" --config Release
   fi
   if [ ! -f models/ggml-small.en.bin ]; then
       bash models/download-ggml-model.sh small.en

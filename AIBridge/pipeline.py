@@ -89,13 +89,14 @@ class MockTTS:
 @dataclass
 class WhisperCppSTT:
     """
-    Shells out to the whisper.cpp `main` (or `whisper-cli`) binary.
+    Shells out to the whisper.cpp `whisper-cli` binary (cmake-built layout
+    used by current whisper.cpp; the old `make main` flow no longer exists).
 
     Requires:
       - whisper.cpp built on the Pi (default location: /opt/whisper.cpp)
       - a model downloaded (default: ggml-small.en.bin)
     """
-    binary: str = "/opt/whisper.cpp/main"
+    binary: str = "/opt/whisper.cpp/build/bin/whisper-cli"
     model_path: str = "/opt/whisper.cpp/models/ggml-small.en.bin"
     threads: int = 4
 

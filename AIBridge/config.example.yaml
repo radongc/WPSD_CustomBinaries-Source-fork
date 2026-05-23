@@ -28,7 +28,7 @@ bot:
 stt:
   # kind: "whisper" (real) or "mock" (returns canned text)
   kind: whisper
-  binary: /opt/whisper.cpp/main
+  binary: /opt/whisper.cpp/build/bin/whisper-cli
   model_path: /opt/whisper.cpp/models/ggml-small.en.bin
   threads: 4
 

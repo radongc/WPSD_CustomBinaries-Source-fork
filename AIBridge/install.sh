@@ -23,8 +23,10 @@ echo "[1/6] Installing apt packages"
 apt-get update -qq
 apt-get install -y --no-install-recommends \
     python3 python3-pip python3-yaml \
-    sox build-essential cmake git \
-    libmbe-dev   # for the eventual real IMBE codec
+    sox build-essential cmake git
+# NOTE: mbelib is not in standard Debian/RPi repos. When we wire the real
+# IMBE codec, we'll add a "build mbelib from source" step here. Until then
+# the mock codec needs no native deps.
 
 # ─── python packages ───────────────────────────────────────────────────────
 echo "[2/6] Installing Python packages"

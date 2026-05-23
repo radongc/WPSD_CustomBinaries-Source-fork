@@ -11,7 +11,12 @@ set -euo pipefail
 REPO_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 INSTALL_DIR=/opt/aibridge
 CONFIG_DIR=/etc/aibridge
-USER_HOME=$(getent passwd pi | cut -d: -f6)
+
+# Detect the user who invoked sudo (pi-star on WPSD, pi on plain Raspberry
+# Pi OS, etc.). Falls back to "root" if the script wasn't run with sudo.
+RUN_USER="${SUDO_USER:-root}"
+RUN_GROUP="$(id -gn "$RUN_USER" 2>/dev/null || echo "$RUN_USER")"
+echo "Installing for user: $RUN_USER (group: $RUN_GROUP)"
 
 # ─── apt packages ──────────────────────────────────────────────────────────
 echo "[1/6] Installing apt packages"
@@ -77,7 +82,9 @@ fi
 
 # ─── systemd unit ──────────────────────────────────────────────────────────
 echo "[6/6] Installing systemd unit"
-cp "$REPO_DIR/aibridge.service" /etc/systemd/system/aibridge.service
+sed -e "s|^User=.*|User=$RUN_USER|" \
+    -e "s|^Group=.*|Group=$RUN_GROUP|" \
+    "$REPO_DIR/aibridge.service" > /etc/systemd/system/aibridge.service
 systemctl daemon-reload
 echo
 echo "Done."

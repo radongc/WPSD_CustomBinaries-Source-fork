@@ -1,0 +1,57 @@
+# AIBridge configuration.
+# Copy to /etc/aibridge/config.yaml and edit.
+
+listen:
+  # UDP socket the bridge listens on for MMDVMHost's P25 network traffic.
+  # MMDVMHost.ini [P25 Network] GatewayAddress/GatewayPort must match these.
+  host: "0.0.0.0"
+  port: 42020
+
+mmdvm:
+  # Where we send TX traffic. Usually the bridge learns this automatically
+  # from the first RX packet (the source address of MMDVMHost). Override
+  # only if MMDVMHost binds RX and TX to different ports.
+  # host: "127.0.0.1"
+  # port: 42010
+
+bot:
+  # P25 source ID the bot transmits as (24-bit unit ID). Pick something
+  # not used by any of your real radios.
+  src_id: 1234567
+
+  # Talkgroup / destination ID. Match this to your radio's TG.
+  dst_id: 1
+
+  lcf: 0
+  mfid: 0
+
+stt:
+  # kind: "whisper" (real) or "mock" (returns canned text)
+  kind: whisper
+  binary: /opt/whisper.cpp/main
+  model_path: /opt/whisper.cpp/models/ggml-small.en.bin
+  threads: 4
+
+llm:
+  # kind: "claude" or "mock"
+  kind: claude
+
+  # Either put the key here or set ANTHROPIC_API_KEY in the env. Env wins
+  # if both are set. Keep this file readable only by root if you put the
+  # key here (chmod 600 /etc/aibridge/config.yaml).
+  api_key: ""
+
+  model: claude-haiku-4-5-20251001
+  max_tokens: 200
+
+  system_prompt: |
+    You are a helpful AI assistant accessible by amateur radio over a P25
+    voice link. Keep responses short, plain, and easy to follow when heard
+    aloud — under 40 words. No code blocks, no markdown, no lists.
+
+tts:
+  # kind: "piper" or "mock"
+  kind: piper
+  binary: piper
+  voice_path: /opt/piper/voices/en_US-amy-medium.onnx
+  voice_rate: 22050  # native rate of the Piper voice; resampled to 8 kHz

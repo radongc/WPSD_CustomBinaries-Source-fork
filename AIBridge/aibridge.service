@@ -1,0 +1,25 @@
+[Unit]
+Description=AIBridge — voice AI assistant over P25 hotspot
+After=network-online.target mmdvmhost.service
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=pi
+Group=pi
+WorkingDirectory=/opt/aibridge
+ExecStart=/usr/bin/python3 /opt/aibridge/bridge.py /etc/aibridge/config.yaml
+Restart=on-failure
+RestartSec=5
+StandardOutput=journal
+StandardError=journal
+
+# Run with mock codec initially; switch to mbelib once the binding is wired.
+Environment=AIBRIDGE_CODEC=mock
+Environment=AIBRIDGE_LOG=INFO
+
+# Optional: pass the API key via env if not in config.
+# Environment=ANTHROPIC_API_KEY=sk-ant-...
+
+[Install]
+WantedBy=multi-user.target

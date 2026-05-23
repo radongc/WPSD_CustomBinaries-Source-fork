@@ -40,8 +40,15 @@ fi
 ( cd /opt/whisper.cpp
   # whisper.cpp uses cmake now (the old `make main` target was removed).
   # The binary lands at build/bin/whisper-cli.
+  #
+  # On 32-bit ARM (armhf — including Pi-Star/WPSD userland even on a 64-bit
+  # kernel), 64-bit atomic ops require explicit -latomic linkage, which the
+  # upstream CMakeLists doesn't request. Pass it via linker flags.
   if [ ! -x build/bin/whisper-cli ]; then
-      cmake -B build -DCMAKE_BUILD_TYPE=Release
+      rm -rf build  # clean any prior failed configuration
+      cmake -B build -DCMAKE_BUILD_TYPE=Release \
+          -DCMAKE_EXE_LINKER_FLAGS="-latomic" \
+          -DCMAKE_SHARED_LINKER_FLAGS="-latomic"
       cmake --build build -j"$(nproc)" --config Release
   fi
   if [ ! -f models/ggml-small.en.bin ]; then

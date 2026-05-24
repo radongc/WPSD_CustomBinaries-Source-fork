@@ -76,18 +76,25 @@ class Bridge:
     """Owns the UDP socket, state machine, and worker threads."""
 
     def __init__(self, cfg: dict) -> None:
+        # YAML quirk: a section with all-commented keys parses as None, not
+        # {}, so cfg.get("foo", {}) returns None and breaks `in` / .get on
+        # it. Coerce every section to a dict.
+        def section(name: str) -> dict:
+            return cfg.get(name) or {}
+
         self.cfg = cfg
-        self.listen_addr = cfg.get("listen", {}).get("host", "0.0.0.0")
-        self.listen_port = int(cfg.get("listen", {}).get("port", 42020))
+        listen_cfg = section("listen")
+        self.listen_addr = listen_cfg.get("host", "0.0.0.0")
+        self.listen_port = int(listen_cfg.get("port", 42020))
         self.mmdvm_addr: Optional[tuple[str, int]] = None  # filled on first packet
 
         # If MMDVMHost's RX side and TX side differ, allow explicit override.
-        mmdvm_cfg = cfg.get("mmdvm", {})
+        mmdvm_cfg = section("mmdvm")
         if "host" in mmdvm_cfg and "port" in mmdvm_cfg:
             self.mmdvm_addr = (mmdvm_cfg["host"], int(mmdvm_cfg["port"]))
 
         # Bot identity used in TX-side P25 LDU1 control fields.
-        bot_cfg = cfg.get("bot", {})
+        bot_cfg = section("bot")
         self.bot_src_id = int(bot_cfg.get("src_id", 1234567))   # who we appear as
         self.bot_dst_id = int(bot_cfg.get("dst_id", 1))         # default TG to talk on
         self.bot_lcf = int(bot_cfg.get("lcf", 0))

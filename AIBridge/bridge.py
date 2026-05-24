@@ -340,17 +340,24 @@ class Bridge:
                         break
                     buf.extend(item)
 
-                if not buf:
-                    break  # cleanly finished
-
-                # Build one LDU. Pad with silence if short (final partial
-                # or transient underrun mid-stream).
                 if len(buf) >= self._LDU_PCM_BYTES:
+                    # Full LDU of real audio.
                     pcm_ldu = bytes(buf[:self._LDU_PCM_BYTES])
                     del buf[:self._LDU_PCM_BYTES]
-                else:
+                elif producer_done:
+                    # Final partial LDU (silence-padded), or genuinely
+                    # nothing left — end the call.
+                    if not buf:
+                        break
                     pcm_ldu = bytes(buf) + b"\x00" * (self._LDU_PCM_BYTES - len(buf))
                     buf.clear()
+                else:
+                    # Transient underrun mid-stream (e.g. waiting for the
+                    # LLM to produce the next sentence and TTS to render
+                    # it). Send a full silence LDU to keep the call up;
+                    # KEEP buf so the partial audio joins the next real
+                    # LDU instead of being padded prematurely.
+                    pcm_ldu = b"\x00" * self._LDU_PCM_BYTES
 
                 frames = imbe_codec.pcm_to_imbe_frames(pcm_ldu, self.codec)
                 # Defensive: the encoder should give us exactly 9 frames

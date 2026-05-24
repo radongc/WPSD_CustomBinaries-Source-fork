@@ -56,10 +56,12 @@ tts:
   # kind: "piper" or "mock"
   kind: piper
   binary: piper
-  # lessac-medium: smoother intonation than amy at the same render cost.
-  # Other good options (download via Piper voice URL pattern):
+  # ryan-high: deeper male voice, "high" quality tier — most natural-
+  # sounding Piper voice in the en_US set. Renders ~2x slower than
+  # medium voices (~1.5s vs ~0.8s) but prosody is noticeably more human.
+  # Other good options:
+  #   en_US-lessac-medium      (faster, also clean prosody)
   #   en_US-libritts_r-medium  (smoother/expressive, slightly slower)
-  #   en_US-ryan-high          (deeper male, very natural, ~2x slower)
   #   en_GB-jenny_dioco-medium (British, pleasant)
-  voice_path: /opt/piper/voices/en_US-lessac-medium.onnx
+  voice_path: /opt/piper/voices/en_US-ryan-high.onnx
   voice_rate: 22050  # native rate of the Piper voice; resampled to 8 kHz

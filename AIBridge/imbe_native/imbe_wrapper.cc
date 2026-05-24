@@ -108,23 +108,35 @@ void aibridge_imbe_encode(aibridge_imbe_ctx *ctx,
 
     /* Pack quantizer indices for Gm[2..6] into bb[3..7].
      * mbelib reads bb[i+1][j] for j = width-1 down to 0 to form an MSB-first
-     * binary string, so bb[i+1][j] is bit (width-1 - j) of the MSB-first
-     * binary representation. Or equivalently: bb[i+1][j] = (bm >> j) & 1
-     * if you treat j as the bit index from LSB. */
+     * binary string, so bb[i+1][j] = (bm >> j) & 1 with j as LSB-first index. */
     for (int i = 2; i <= 6; i++) {
         int width = (int)ba[L9][i - 2][0];
         if (width <= 0 || width > 12) continue;
-        /* OP25's frame_vector[i+1] holds the quantizer index for Gm[i]. */
         uint32_t bm = (uint32_t)(uint16_t)fv[i + 1];
         for (int j = 0; j < width; j++) {
             bb[i + 1][j] = (char)((bm >> j) & 1);
         }
     }
 
-    /* Optional: encode V/UV flags into bb[1..2][...]. We don't have a
-     * good mapping from imbe_vocoder's output, so we leave them zero
-     * which produces "all voiced" — acceptable for speech, slight
-     * artifact on sibilants. */
+    /* Pack V/UV flags into bb[1][0..K-1]. K = number of V/UV bands.
+     *   K = (L + 2) / 3  for L < 37
+     *   K = 12           for L >= 37
+     * (per mbe_decodeImbe4400Parms in mbelib's imbe7200x4400.c.)
+     * fv[1] is the K-bit V/UV bitfield from imbe_vocoder. */
+    int K_bands = (L < 37) ? ((L + 2) / 3) : 12;
+    if (K_bands > 12) K_bands = 12;
+    uint32_t vuv_bits = (uint32_t)(uint16_t)fv[1];
+    for (int j = 0; j < K_bands; j++) {
+        bb[1][j] = (char)((vuv_bits >> j) & 1);
+    }
+
+    /* Pack gain (b2) into bb[2][0..5]. mbelib's decoder builds b2 as a
+     * 6-bit value from bb[2] entries (mbelib uses B2[64] which is a
+     * 6-bit-indexed lookup → 64 entries). fv[2] is the gain index. */
+    uint32_t gain_bits = (uint32_t)(uint16_t)fv[2];
+    for (int j = 0; j < 6; j++) {
+        bb[2][j] = (char)((gain_bits >> j) & 1);
+    }
 
     /* Pack imbe_d as 88 single-bit chars first, then collapse to bytes. */
     char imbe_d[88];

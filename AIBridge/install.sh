@@ -157,19 +157,20 @@ if ! piper --help >/dev/null 2>&1; then
     ln -sf /opt/piper/piper /usr/local/bin/piper
 fi
 mkdir -p /opt/piper/voices
-# Default voice: ryan-high. Deeper male voice, "high" quality tier —
-# the most natural-sounding Piper voice in the en_US set. Renders ~2x
-# slower than medium voices (~1.5s vs ~0.8s per response) but the
-# prosody/intonation is noticeably more human. To swap, edit
-# /etc/aibridge/config.yaml tts.voice_path; other voices to try:
-#   en_US-lessac-medium      (faster, also clean prosody)
+# Default voice: ryan-medium. Same male voice character as ryan-high
+# but with a smaller model — renders ~2-3x faster (~0.8s vs ~2s+ per
+# response) for slightly less refined prosody. Best speed/quality
+# tradeoff on Pi-class hardware. To swap, edit /etc/aibridge/config.yaml
+# tts.voice_path; other voices to try:
+#   en_US-ryan-high          (same voice, most natural, but slow on Pi)
+#   en_US-lessac-medium      (female, very clean prosody)
 #   en_US-libritts_r-medium  (smoother/expressive)
 #   en_GB-jenny_dioco-medium (British, very pleasant)
-if [ ! -f /opt/piper/voices/en_US-ryan-high.onnx ]; then
-    curl -fL -o /opt/piper/voices/en_US-ryan-high.onnx \
-        https://huggingface.co/rhasspy/piper-voices/resolve/main/en/en_US/ryan/high/en_US-ryan-high.onnx
-    curl -fL -o /opt/piper/voices/en_US-ryan-high.onnx.json \
-        https://huggingface.co/rhasspy/piper-voices/resolve/main/en/en_US/ryan/high/en_US-ryan-high.onnx.json
+if [ ! -f /opt/piper/voices/en_US-ryan-medium.onnx ]; then
+    curl -fL -o /opt/piper/voices/en_US-ryan-medium.onnx \
+        https://huggingface.co/rhasspy/piper-voices/resolve/main/en/en_US/ryan/medium/en_US-ryan-medium.onnx
+    curl -fL -o /opt/piper/voices/en_US-ryan-medium.onnx.json \
+        https://huggingface.co/rhasspy/piper-voices/resolve/main/en/en_US/ryan/medium/en_US-ryan-medium.onnx.json
 fi
 
 # ─── install the bridge itself ─────────────────────────────────────────────

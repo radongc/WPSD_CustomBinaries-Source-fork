@@ -56,12 +56,12 @@ tts:
   # kind: "piper" or "mock"
   kind: piper
   binary: piper
-  # ryan-high: deeper male voice, "high" quality tier — most natural-
-  # sounding Piper voice in the en_US set. Renders ~2x slower than
-  # medium voices (~1.5s vs ~0.8s) but prosody is noticeably more human.
-  # Other good options:
-  #   en_US-lessac-medium      (faster, also clean prosody)
+  # ryan-medium: deeper male voice, medium quality. Same voice character
+  # as ryan-high but renders ~2-3x faster on Pi-class hardware
+  # (~0.8s vs ~2s+). Best speed/quality tradeoff. Other options:
+  #   en_US-ryan-high          (same voice, most natural, but slow on Pi)
+  #   en_US-lessac-medium      (female, very clean prosody)
   #   en_US-libritts_r-medium  (smoother/expressive, slightly slower)
   #   en_GB-jenny_dioco-medium (British, pleasant)
-  voice_path: /opt/piper/voices/en_US-ryan-high.onnx
+  voice_path: /opt/piper/voices/en_US-ryan-medium.onnx
   voice_rate: 22050  # native rate of the Piper voice; resampled to 8 kHz

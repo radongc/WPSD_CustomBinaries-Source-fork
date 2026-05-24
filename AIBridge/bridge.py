@@ -232,9 +232,18 @@ class Bridge:
     _FRAME_PCM_BYTES = 320
     _LDU_FRAMES = 9
     _LDU_PCM_BYTES = _LDU_FRAMES * _FRAME_PCM_BYTES   # 2880
-    # How long to wait for the very first PCM byte before giving up. TTS
-    # warmup + first LLM sentence on a Pi can comfortably take 5+ sec.
-    _PREBUFFER_TIMEOUT_S = 10.0
+
+    # Build a cushion of audio before keying up. Once TX starts we consume
+    # PCM at exactly real-time, but Piper produces in bursts with brief
+    # gaps between sentences (subprocess warmup). If the buffer goes
+    # empty mid-call we have to send silence LDUs, and some modems / radios
+    # treat our synthesised silence frames as a loss-of-signal and drop
+    # the carrier briefly. ~1.5 sec of headroom is enough to absorb a
+    # typical inter-sentence gap on a Pi.
+    _PREBUFFER_TARGET_BYTES = 24000   # ~1.5 sec of 8 kHz / 16-bit PCM
+    # Max wall time we'll wait to fill the prebuffer before keying up
+    # anyway. Bounded so a slow first sentence doesn't hang TX forever.
+    _PREBUFFER_DEADLINE_S = 10.0
 
     def _transmit_pcm_stream(self, chunks_iter) -> None:
         """
@@ -242,13 +251,10 @@ class Bridge:
         from a PCM-chunk iterator (pipeline.run_stream).
 
         A producer thread drains the iterator into a queue so LLM/TTS
-        latency can't stall TX pacing. If the queue underruns mid-call
-        we pad the current LDU with silence rather than letting the
-        radio drop the call.
-
-        We don't transition to State.TX (and don't key the radio) until
-        the first PCM byte actually arrives — avoids leading dead air
-        during the LLM/TTS warmup.
+        latency can't stall TX pacing. We prebuffer ~1.5 sec of audio
+        before keying up so brief inter-sentence Piper gaps don't drain
+        the queue mid-call. If the queue does underrun mid-stream we
+        send a silence LDU to keep the carrier up.
         """
         if self.mmdvm_addr is None:
             log.warning("No MMDVMHost peer known yet; can't TX")
@@ -282,16 +288,21 @@ class Bridge:
         producer_done = False
 
         try:
-            # ─── Prebuffer: wait for first PCM before keying up. ────────
-            deadline = time.monotonic() + self._PREBUFFER_TIMEOUT_S
-            while not buf and not producer_done:
+            # ─── Prebuffer ──────────────────────────────────────────────
+            # Build up a cushion of audio before keying up. We stop early
+            # if (a) we hit the target, (b) the producer finishes, or
+            # (c) the deadline expires (so a slow first sentence still
+            # eventually starts TXing with whatever we have).
+            deadline = time.monotonic() + self._PREBUFFER_DEADLINE_S
+            while (len(buf) < self._PREBUFFER_TARGET_BYTES
+                   and not producer_done):
                 if self.tx_abort.is_set():
                     return
                 remaining = deadline - time.monotonic()
                 if remaining <= 0:
-                    log.warning("TX prebuffer timeout (%.1fs); nothing to send",
-                                self._PREBUFFER_TIMEOUT_S)
-                    return
+                    log.info("TX prebuffer deadline; starting with %d/%d bytes",
+                             len(buf), self._PREBUFFER_TARGET_BYTES)
+                    break
                 try:
                     item = pcm_q.get(timeout=min(remaining, 0.5))
                 except queue.Empty:
@@ -318,10 +329,12 @@ class Bridge:
                 mfid=self.bot_mfid,
                 alg_id=0x80,  # CLEAR
             )
-            log.info("TX stream start")
+            log.info("TX stream start (prebuffered %d bytes / %.2fs)",
+                     len(buf), len(buf) / 16000.0)
             t0 = time.monotonic()
             toggle_ldu1 = True
             total_frames = 0
+            silence_ldus = 0   # diagnostic — mid-stream underrun count
 
             # ─── Steady-state TX loop. ─────────────────────────────────
             while True:
@@ -358,6 +371,7 @@ class Bridge:
                     # KEEP buf so the partial audio joins the next real
                     # LDU instead of being padded prematurely.
                     pcm_ldu = b"\x00" * self._LDU_PCM_BYTES
+                    silence_ldus += 1
 
                 frames = imbe_codec.pcm_to_imbe_frames(pcm_ldu, self.codec)
                 # Defensive: the encoder should give us exactly 9 frames
@@ -384,8 +398,9 @@ class Bridge:
 
             self.sock.sendto(p25.build_end_record(), self.mmdvm_addr)
             elapsed = time.monotonic() - t0
-            log.info("TX stream end: %d frames (%.2fs audio, %.2fs wall)",
-                     total_frames, total_frames * 0.020, elapsed)
+            log.info("TX stream end: %d frames (%.2fs audio, %.2fs wall), "
+                     "%d silence LDUs from underruns",
+                     total_frames, total_frames * 0.020, elapsed, silence_ldus)
         except Exception:
             log.exception("TX stream failed")
         finally:

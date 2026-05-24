@@ -63,9 +63,13 @@ PATCH
       cmake -B build -DCMAKE_BUILD_TYPE=Release
       cmake --build build -j"$(nproc)" --config Release
   fi
-  if [ ! -f models/ggml-small.en.bin ]; then
-      bash models/download-ggml-model.sh small.en
+  # base.en is the latency sweet spot on a Pi: ~3-4x faster than small.en
+  # for ~5% WER tradeoff on clean speech. small.en is still a good upgrade
+  # if a Pi 5 has headroom, so we leave the download for it commented in.
+  if [ ! -f models/ggml-base.en.bin ]; then
+      bash models/download-ggml-model.sh base.en
   fi
+  # bash models/download-ggml-model.sh small.en   # uncomment to also fetch small
 )
 
 # ─── mbelib + IMBE codec wrapper ───────────────────────────────────────────
@@ -153,11 +157,17 @@ if ! piper --help >/dev/null 2>&1; then
     ln -sf /opt/piper/piper /usr/local/bin/piper
 fi
 mkdir -p /opt/piper/voices
-if [ ! -f /opt/piper/voices/en_US-amy-medium.onnx ]; then
-    curl -fL -o /opt/piper/voices/en_US-amy-medium.onnx \
-        https://huggingface.co/rhasspy/piper-voices/resolve/main/en/en_US/amy/medium/en_US-amy-medium.onnx
-    curl -fL -o /opt/piper/voices/en_US-amy-medium.onnx.json \
-        https://huggingface.co/rhasspy/piper-voices/resolve/main/en/en_US/amy/medium/en_US-amy-medium.onnx.json
+# Default voice: lessac-medium. Slightly more natural prosody than amy
+# at the same render cost. To swap, edit /etc/aibridge/config.yaml
+# tts.voice_path; other recommended voices to try:
+#   en_US-libritts_r-medium  (smoother/expressive)
+#   en_US-ryan-high          (deeper male, higher quality, ~2x slower)
+#   en_GB-jenny_dioco-medium (British, very pleasant)
+if [ ! -f /opt/piper/voices/en_US-lessac-medium.onnx ]; then
+    curl -fL -o /opt/piper/voices/en_US-lessac-medium.onnx \
+        https://huggingface.co/rhasspy/piper-voices/resolve/main/en/en_US/lessac/medium/en_US-lessac-medium.onnx
+    curl -fL -o /opt/piper/voices/en_US-lessac-medium.onnx.json \
+        https://huggingface.co/rhasspy/piper-voices/resolve/main/en/en_US/lessac/medium/en_US-lessac-medium.onnx.json
 fi
 
 # ─── install the bridge itself ─────────────────────────────────────────────

@@ -29,7 +29,10 @@ stt:
   # kind: "whisper" (real) or "mock" (returns canned text)
   kind: whisper
   binary: /opt/whisper.cpp/build/bin/whisper-cli
-  model_path: /opt/whisper.cpp/models/ggml-small.en.bin
+  # base.en runs at ~real-time on a Pi (vs ~3x real-time for small.en)
+  # and is the recommended default. small.en gives better accuracy on
+  # very noisy audio if you don't mind the latency.
+  model_path: /opt/whisper.cpp/models/ggml-base.en.bin
   threads: 4
 
 llm:
@@ -53,5 +56,10 @@ tts:
   # kind: "piper" or "mock"
   kind: piper
   binary: piper
-  voice_path: /opt/piper/voices/en_US-amy-medium.onnx
+  # lessac-medium: smoother intonation than amy at the same render cost.
+  # Other good options (download via Piper voice URL pattern):
+  #   en_US-libritts_r-medium  (smoother/expressive, slightly slower)
+  #   en_US-ryan-high          (deeper male, very natural, ~2x slower)
+  #   en_GB-jenny_dioco-medium (British, pleasant)
+  voice_path: /opt/piper/voices/en_US-lessac-medium.onnx
   voice_rate: 22050  # native rate of the Piper voice; resampled to 8 kHz

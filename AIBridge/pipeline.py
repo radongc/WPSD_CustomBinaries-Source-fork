@@ -31,6 +31,36 @@ log = logging.getLogger("aibridge.pipeline")
 PCM_SAMPLE_RATE = 8000
 
 
+# Voice commands. Match if any of these substrings appear in the STT
+# transcript (case-insensitive). Whisper's punctuation/capitalization
+# may vary, so we keep these forgiving.
+RESET_COMMANDS = (
+    "reset conversation",
+    "restart conversation",
+    "new conversation",
+    "new chat",
+    "start over",
+    "forget everything",
+    "forget what i said",
+    "clear memory",
+    "clear context",
+    "wipe memory",
+)
+
+
+def _handle_voice_command(text: str, llm, conversation_id: str) -> Optional[str]:
+    """If `text` matches a built-in voice command, perform it and return
+    a canned reply string. Returns None if no command matched (caller
+    should pass through to the LLM)."""
+    lowered = text.lower().strip().rstrip(".!?")
+    for phrase in RESET_COMMANDS:
+        if phrase in lowered:
+            llm.reset_conversation(conversation_id)
+            log.info("Voice command matched: %r", phrase)
+            return "Conversation reset. What's on your mind?"
+    return None
+
+
 # ─── interfaces ────────────────────────────────────────────────────────────
 
 class STT(Protocol):
@@ -39,6 +69,7 @@ class STT(Protocol):
 
 class LLM(Protocol):
     def respond(self, user_text: str, conversation_id: str = "default") -> str: ...
+    def reset_conversation(self, conversation_id: str = "default") -> None: ...
 
 
 class TTS(Protocol):
@@ -64,6 +95,9 @@ class MockLLM:
     def respond(self, user_text: str, conversation_id: str = "default") -> str:
         log.info("MockLLM[%s]: %r → echo", conversation_id, user_text)
         return f"You said: {user_text}. This is the mock bot."
+
+    def reset_conversation(self, conversation_id: str = "default") -> None:
+        log.info("MockLLM[%s]: reset (no-op)", conversation_id)
 
 
 class MockTTS:
@@ -202,6 +236,15 @@ class ClaudeLLM:
                  conversation_id, elapsed, len(text), len(history))
         return text
 
+    def reset_conversation(self, conversation_id: str = "default") -> None:
+        """Drop the history for one conversation. Last-seen stays untouched
+        so the idle-reset clock starts from the next message rather than
+        immediately re-triggering."""
+        if conversation_id in self._histories:
+            log.info("Claude[%s]: manual reset, %d turns dropped",
+                     conversation_id, len(self._histories[conversation_id]))
+            del self._histories[conversation_id]
+
 
 @dataclass
 class PiperTTS:
@@ -274,11 +317,16 @@ class Pipeline:
         if not text_in.strip():
             return None  # nothing said, nothing to answer
 
-        try:
-            text_out = self.llm.respond(text_in, conversation_id=conversation_id)
-        except Exception:
-            log.exception("LLM failed")
-            return None
+        # Voice commands handled locally before the LLM gets the text.
+        cmd_reply = _handle_voice_command(text_in, self.llm, conversation_id)
+        if cmd_reply is not None:
+            text_out = cmd_reply
+        else:
+            try:
+                text_out = self.llm.respond(text_in, conversation_id=conversation_id)
+            except Exception:
+                log.exception("LLM failed")
+                return None
         log.info("LLM → %r", text_out)
         if not text_out.strip():
             return None

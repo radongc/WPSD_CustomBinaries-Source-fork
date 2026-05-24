@@ -156,7 +156,7 @@ def get_codec() -> Codec:
         log.info("Using MockCodec (silent passthrough)")
         return MockCodec()
     if choice == "mbelib":
-        log.info("Using MbelibCodec (real decode via mbelib, encode still mock)")
+        log.info("Using MbelibCodec (decode: mbelib; encode: OP25 imbe_vocoder)")
         return MbelibCodec()
     raise ValueError(f"Unknown AIBRIDGE_CODEC={choice!r}")
 

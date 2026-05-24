@@ -115,12 +115,24 @@ fi
 
 # ─── piper ─────────────────────────────────────────────────────────────────
 echo "[5/7] Installing Piper TTS + en_US-amy-medium voice"
-if ! command -v piper >/dev/null 2>&1; then
+# Test by actually executing piper rather than just checking PATH. On
+# Pi-Star/WPSD the kernel is aarch64 but the userland is armhf — if a
+# previous install dropped the wrong arch's binary, "command -v piper"
+# would succeed but exec'ing it returns ENOENT (the 64-bit dynamic
+# linker isn't present in the armhf filesystem).
+if ! piper --help >/dev/null 2>&1; then
     PIPER_VER=2023.11.14-2
-    PIPER_TGZ="piper_linux_aarch64.tar.gz"
-    if [ "$(uname -m)" = "armv7l" ]; then
-        PIPER_TGZ="piper_linux_armv7l.tar.gz"
-    fi
+    # Use the userland architecture (dpkg) rather than the kernel arch.
+    USERLAND_ARCH="$(dpkg --print-architecture 2>/dev/null || uname -m)"
+    case "$USERLAND_ARCH" in
+        armhf|armv7l)   PIPER_TGZ="piper_linux_armv7l.tar.gz" ;;
+        arm64|aarch64)  PIPER_TGZ="piper_linux_aarch64.tar.gz" ;;
+        amd64|x86_64)   PIPER_TGZ="piper_linux_x86_64.tar.gz" ;;
+        *) echo "Unknown userland arch: $USERLAND_ARCH"; exit 1 ;;
+    esac
+    echo "  → using Piper build: $PIPER_TGZ (userland $USERLAND_ARCH)"
+    # Wipe any prior install so a wrong-arch leftover gets replaced.
+    rm -rf /opt/piper /usr/local/bin/piper
     mkdir -p /opt/piper
     cd /tmp
     curl -fL -o "$PIPER_TGZ" \

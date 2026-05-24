@@ -103,9 +103,12 @@ chmod +x "$INSTALL_DIR/bridge.py"
 mkdir -p "$CONFIG_DIR"
 if [ ! -f "$CONFIG_DIR/config.yaml" ]; then
     cp "$REPO_DIR/config.example.yaml" "$CONFIG_DIR/config.yaml"
-    chmod 600 "$CONFIG_DIR/config.yaml"
     echo "  → wrote default $CONFIG_DIR/config.yaml — edit it (API key, IDs, etc.)"
 fi
+# Always (re-)set ownership and mode so the systemd service running as
+# RUN_USER can read the file. 600 keeps the API key from other users.
+chown "$RUN_USER:$RUN_GROUP" "$CONFIG_DIR/config.yaml"
+chmod 600 "$CONFIG_DIR/config.yaml"
 
 # ─── systemd unit ──────────────────────────────────────────────────────────
 echo "[6/6] Installing systemd unit"

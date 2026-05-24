@@ -15,7 +15,12 @@
  * The "4400" is the IMBE post-FEC information rate (4400 bps).
  */
 
+/* mbelib.h doesn't have extern "C" guards in older versions, so g++ would
+ * otherwise mangle the names and the linker can't find them in libmbe.so
+ * (which exports plain C symbols). Wrap the include. */
+extern "C" {
 #include <mbelib.h>
+}
 #include <cstdint>
 #include <cstring>
 

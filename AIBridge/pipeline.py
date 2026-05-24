@@ -182,11 +182,17 @@ class PiperTTS:
             [self.binary, "--model", self.voice_path, "--output-raw"],
             stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
         )
+        # gain -6: drop 6 dB to leave headroom — Piper output is hot enough
+        # that IMBE encoding clips on peaks, which the radio renders as the
+        # "loud and muffled" artifact. -6 dB sounds about right empirically.
+        # rate -v: highest-quality resampler. Default sox rate is lower
+        # quality, costing high-frequency detail when downsampling 22050 → 8000.
         sox = subprocess.Popen(
             ["sox", "-t", "raw", "-r", str(self.voice_rate), "-e", "signed",
              "-b", "16", "-c", "1", "-",
              "-t", "raw", "-r", str(PCM_SAMPLE_RATE), "-e", "signed",
-             "-b", "16", "-c", "1", "-"],
+             "-b", "16", "-c", "1", "-",
+             "gain", "-6", "rate", "-v"],
             stdin=piper.stdout, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
         )
         if piper.stdout:

@@ -82,9 +82,35 @@ if [ ! -f /usr/local/lib/libmbe.so ]; then
     )
     ldconfig
 fi
+
+# OP25's imbe_vocoder gives us the encoder (mbelib is decode-only).
+# We clone OP25 just to copy out its imbe_vocoder subdirectory, then
+# build it as a standalone static library that our wrapper links against.
+if [ ! -d /opt/op25 ]; then
+    git clone --depth 1 https://github.com/osmocom/op25.git /opt/op25
+fi
+IMBE_VOC_SRC=/opt/imbe_vocoder
+if [ ! -d "$IMBE_VOC_SRC" ]; then
+    cp -r /opt/op25/op25/gr-op25_repeater/lib/imbe_vocoder "$IMBE_VOC_SRC"
+    # Write a minimal CMakeLists for standalone static-library build.
+    cat > "$IMBE_VOC_SRC/CMakeLists.txt" <<'EOF'
+cmake_minimum_required(VERSION 3.10)
+project(imbe_vocoder CXX)
+set(CMAKE_CXX_STANDARD 11)
+file(GLOB SOURCES "*.cc")
+add_library(imbe_vocoder STATIC ${SOURCES})
+target_include_directories(imbe_vocoder PUBLIC .)
+set_property(TARGET imbe_vocoder PROPERTY POSITION_INDEPENDENT_CODE ON)
+EOF
+fi
+if [ ! -f "$IMBE_VOC_SRC/build/libimbe_vocoder.a" ]; then
+    cmake -B "$IMBE_VOC_SRC/build" -S "$IMBE_VOC_SRC" -DCMAKE_BUILD_TYPE=Release
+    cmake --build "$IMBE_VOC_SRC/build" -j"$(nproc)"
+fi
+
 ( cd "$REPO_DIR/imbe_native"
   make clean
-  make
+  make IMBE_VOC_DIR="$IMBE_VOC_SRC"
 )
 
 # ─── piper ─────────────────────────────────────────────────────────────────

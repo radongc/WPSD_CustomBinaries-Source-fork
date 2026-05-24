@@ -323,15 +323,28 @@ class PiperTTS:
             [self.binary, "--model", self.voice_path, "--output-raw"],
             stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
         )
-        # gain -6: 6 dB headroom prevents IMBE clipping on Piper peaks.
-        # rate -v: high-quality downsample 22050 → 8000 (preserves more
-        # high-frequency detail than sox's default resampler).
+        # Effects chain:
+        #   gain -6   : 6 dB headroom prevents IMBE clipping on Piper peaks.
+        #   rate -v   : high-quality 22050 → 8000 downsample.
+        #   silence …: trim leading + trailing digital silence (Piper
+        #     bookends each sentence with ~30-60 ms of true zero PCM).
+        #     If we leave it, our concatenated stream has ~100 ms of
+        #     dead-zero PCM at every sentence boundary, which the IMBE
+        #     encoder turns into ultra-low-energy frames that some P25
+        #     receivers treat as loss-of-signal and briefly squelch.
+        #     `reverse … reverse` is the standard sox idiom for
+        #     trim-both-ends, which forces sox to buffer one sentence
+        #     before output — fine, since the bridge prebuffers anyway.
         sox = subprocess.Popen(
             ["sox", "-t", "raw", "-r", str(self.voice_rate), "-e", "signed",
              "-b", "16", "-c", "1", "-",
              "-t", "raw", "-r", str(PCM_SAMPLE_RATE), "-e", "signed",
              "-b", "16", "-c", "1", "-",
-             "gain", "-6", "rate", "-v"],
+             "gain", "-6", "rate", "-v",
+             "silence", "1", "0.05", "0.5%",
+             "reverse",
+             "silence", "1", "0.05", "0.5%",
+             "reverse"],
             stdin=piper.stdout, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
         )
         if piper.stdout:

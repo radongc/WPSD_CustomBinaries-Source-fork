@@ -42,13 +42,28 @@ fi
   # The binary lands at build/bin/whisper-cli.
   #
   # On 32-bit ARM (armhf — including Pi-Star/WPSD userland even on a 64-bit
-  # kernel), 64-bit atomic ops require explicit -latomic linkage, which the
-  # upstream CMakeLists doesn't request. Pass it via linker flags.
+  # kernel), 64-bit atomic ops (__atomic_*_8) are not inlined and require
+  # libatomic at link time. Upstream's CMakeLists doesn't request it on
+  # this platform, and CMAKE_*_LINKER_FLAGS won't help here because GNU ld
+  # needs -latomic AFTER the object files (CMake's linker-flag vars prepend).
+  # Patch ggml's own CMakeLists to link atomic via target_link_libraries,
+  # which places it in the right position in the link command.
+  GGML_CMAKE=ggml/src/CMakeLists.txt
+  if [ -f "$GGML_CMAKE" ] && ! grep -q 'target_link_libraries(ggml-base.*atomic)' "$GGML_CMAKE"; then
+      cat >> "$GGML_CMAKE" <<'PATCH'
+
+# AIBridge patch: ensure libatomic linkage on 32-bit ARM where 64-bit
+# atomic ops are not inlined by GCC. Harmless on other platforms.
+if (CMAKE_SIZEOF_VOID_P EQUAL 4)
+    target_link_libraries(ggml-base PUBLIC atomic)
+endif()
+PATCH
+      echo "Patched $GGML_CMAKE to link libatomic on 32-bit targets"
+  fi
+
   if [ ! -x build/bin/whisper-cli ]; then
       rm -rf build  # clean any prior failed configuration
-      cmake -B build -DCMAKE_BUILD_TYPE=Release \
-          -DCMAKE_EXE_LINKER_FLAGS="-latomic" \
-          -DCMAKE_SHARED_LINKER_FLAGS="-latomic"
+      cmake -B build -DCMAKE_BUILD_TYPE=Release
       cmake --build build -j"$(nproc)" --config Release
   fi
   if [ ! -f models/ggml-small.en.bin ]; then

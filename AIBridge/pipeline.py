@@ -282,9 +282,27 @@ class PiperTTS:
         assert piper_stdin is not None
         piper_stdin.write(text.encode("utf-8"))
         piper_stdin.close()
-        pcm, _ = sox.communicate(timeout=15)
-        piper.wait(timeout=15)
+        # Generous timeout — "high" quality Piper voices on Pi-class CPUs
+        # render at ~2x the rate of medium voices, and a chatty 200+ char
+        # Claude response can take 10-20s. 60s gives plenty of headroom.
+        try:
+            pcm, sox_err = sox.communicate(timeout=60)
+            piper.wait(timeout=60)
+        except subprocess.TimeoutExpired:
+            # Kill both processes so we don't leak zombies, then surface
+            # whatever Piper printed to stderr — usually tells us if the
+            # model file is corrupt, sample rate is wrong, etc.
+            sox.kill()
+            piper.kill()
+            _, piper_err = piper.communicate()
+            log.error("Piper+sox timed out after 60s. Piper stderr: %s",
+                      piper_err.decode("utf-8", errors="replace")[:500])
+            raise
+
         elapsed = time.monotonic() - t0
+        if sox.returncode != 0:
+            log.warning("sox returned %d: %s", sox.returncode,
+                        sox_err.decode("utf-8", errors="replace")[:200])
         log.info("Piper+sox: %.2fs, %d bytes PCM", elapsed, len(pcm))
         return pcm
 

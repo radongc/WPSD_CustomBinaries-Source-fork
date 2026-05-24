@@ -4,64 +4,52 @@
  * Bridges 11-byte IMBE frames (as produced by MMDVMHost's P25 network
  * protocol) and 8 kHz 16-bit PCM:
  *   - Decode:  mbelib's mbe_processImbe4400Data
- *   - Encode:  OP25's imbe_vocoder::imbe_encode + bit packing per TIA-102.BABA
+ *   - Encode:  OP25's imbe_vocoder::imbe_encode + bit packing that mirrors
+ *              exactly what mbelib's decoder expects.
  *
- * Built into libaibridge_imbe.so and loaded by imbe_codec.py via ctypes.
+ * The encode bit packing is the inverse of mbe_decodeImbe4400Parms in
+ * mbelib's imbe7200x4400.c:
+ *   - b0 (8 bits) is split: bits 7..2 -> imbe_d[0..5], bits 1..0 -> imbe_d[85..86]
+ *   - For each i in 2..6, frame_vector[i+1]'s low ba[L9][i-2][0] bits are
+ *     placed in bb[i+1][width-1 .. 0] (LSB-first within bb).
+ *   - The bo[L9][k] lookup maps each bb[r][c] entry to imbe_d[6+k] for
+ *     k = 0..78 (79 entries).
  *
- * NOTE on encode bit packing: the 88 information bits in an IMBE frame
- * carry the b0..b7 parameter vector. Some field widths are L-dependent
- * (L = number of harmonics, derived from b0), but using the maximum
- * widths in fixed positions gives a packing that round-trips through
- * most decoders. If audio quality is poor we may need to switch to
- * an L-aware packing.
+ * We pull the bo[], ba[], hoba[], ImbeJi[], B2[], quantstep[], standdev[]
+ * tables directly from mbelib's header via install.sh, which sed-injects
+ * 'static' on the const declarations so they live in our TU only.
+ *
+ * Limitations of this first-pass implementation:
+ *   - V/UV flags and HOC bits not driven from OP25's frame_vector (which
+ *     can't carry that much data in 8 int16s); they're left zero. That
+ *     means all bands report as "voiced" and higher-order DCT
+ *     coefficients are zero, which slightly flattens the timbre but
+ *     should remain intelligible.
+ *   - L is read from imbe_vocoder::param()->L if available; otherwise
+ *     defaults to L=20 (a midrange value).
  */
 
-/* mbelib.h doesn't have extern "C" guards in older versions, so g++ would
- * otherwise mangle the names and the linker can't find them in libmbe.so
- * (which exports plain C symbols). Wrap the include. */
 extern "C" {
 #include <mbelib.h>
 }
 #include "imbe_vocoder.h"
+#include "mbelib_imbe_const.h"
 #include <cstdint>
 #include <cstring>
 
 namespace {
 
-/* IMBE 88-bit packing layout. Offsets/widths sum to 88. */
-constexpr int B_OFFSETS[8] = {  0,  7, 13, 21, 29, 40, 51, 62 };
-constexpr int B_WIDTHS[8]  = {  7,  6,  8,  8, 11, 11, 11, 26 };
-
-/* Read `count` bits MSB-first starting at bit offset `start` in a packed
- * byte buffer. */
-uint32_t get_bits(const uint8_t *buf, int start, int count) {
-    uint32_t v = 0;
-    for (int i = 0; i < count; i++) {
-        int idx = start + i;
-        v = (v << 1) | ((buf[idx / 8] >> (7 - (idx % 8))) & 1);
-    }
-    return v;
-}
-
-/* Write `count` bits of `value` MSB-first into the buffer at bit offset
- * `start`. Assumes buf is pre-zeroed; only sets ones. */
-void set_bits(uint8_t *buf, int start, int count, uint32_t value) {
-    for (int i = 0; i < count; i++) {
-        int idx = start + (count - 1 - i);
-        if (value & (1u << i)) {
-            buf[idx / 8] |= (uint8_t)(1u << (7 - (idx % 8)));
-        }
-    }
+/* Helper: clamp L to mbelib's table range. */
+inline int clamp_L9(int L) {
+    if (L < 9) L = 9;
+    if (L > 56) L = 56;
+    return L - 9;
 }
 
 } /* anonymous namespace */
 
 extern "C" {
 
-/* Per-stream codec state. mbelib needs prev-frame parameters across calls
- * because the synthesizer interpolates pitch and energy. The imbe_vocoder
- * instance is similarly stateful (the encoder's pitch tracker carries
- * across frames). */
 struct aibridge_imbe_ctx {
     mbe_parms cur_mp;
     mbe_parms prev_mp;
@@ -83,15 +71,12 @@ void aibridge_imbe_destroy(aibridge_imbe_ctx *ctx) {
 void aibridge_imbe_decode(aibridge_imbe_ctx *ctx,
                           const uint8_t *imbe_11b,
                           int16_t *pcm_160) {
-    /* Unpack 11 bytes -> 88 single-bit chars (mbelib's input format). */
     char imbe_bits[88];
     for (int i = 0; i < 88; i++) {
         imbe_bits[i] = (imbe_11b[i / 8] >> (7 - (i % 8))) & 1;
     }
-
     int errs = 0, errs2 = 0;
     char err_str[64] = {0};
-
     mbe_processImbe4400Data(pcm_160, &errs, &errs2, err_str, imbe_bits,
                             &ctx->cur_mp, &ctx->prev_mp,
                             &ctx->prev_mp_enhanced, 3);
@@ -101,18 +86,78 @@ void aibridge_imbe_decode(aibridge_imbe_ctx *ctx,
 void aibridge_imbe_encode(aibridge_imbe_ctx *ctx,
                           const int16_t *pcm_160,
                           uint8_t *imbe_11b) {
-    /* OP25's imbe_encode takes a non-const PCM pointer (it may pre-emphasize
-     * in place). Copy to a local buffer so we don't surprise the caller. */
+    /* imbe_vocoder::imbe_encode may modify its PCM input (pre-emphasis).
+     * Copy so we don't surprise the caller. */
     int16_t pcm_local[160];
     std::memcpy(pcm_local, pcm_160, sizeof(pcm_local));
 
-    int16_t b_vec[8] = {0};
-    ctx->vocoder.imbe_encode(b_vec, pcm_local);
+    int16_t fv[8] = {0};
+    ctx->vocoder.imbe_encode(fv, pcm_local);
 
-    /* Pack b_vec into 88 bits MSB-first. */
+    /* Determine L from the vocoder's internal state. param()->L is the
+     * number of harmonics for this frame; mbelib's tables are indexed by
+     * L9 = L - 9, valid range 9..56. */
+    const IMBE_PARAM *p = ctx->vocoder.param();
+    int L = (p ? p->num_harms : 20);
+    int L9 = clamp_L9(L);
+
+    /* The mbelib decoder's bb[][] bit array, which we fill from fv[] and
+     * then scatter into imbe_d[] using the bo[] table. */
+    char bb[58][12];
+    std::memset(bb, 0, sizeof(bb));
+
+    /* Pack quantizer indices for Gm[2..6] into bb[3..7].
+     * mbelib reads bb[i+1][j] for j = width-1 down to 0 to form an MSB-first
+     * binary string, so bb[i+1][j] is bit (width-1 - j) of the MSB-first
+     * binary representation. Or equivalently: bb[i+1][j] = (bm >> j) & 1
+     * if you treat j as the bit index from LSB. */
+    for (int i = 2; i <= 6; i++) {
+        int width = (int)ba[L9][i - 2][0];
+        if (width <= 0 || width > 12) continue;
+        /* OP25's frame_vector[i+1] holds the quantizer index for Gm[i]. */
+        uint32_t bm = (uint32_t)(uint16_t)fv[i + 1];
+        for (int j = 0; j < width; j++) {
+            bb[i + 1][j] = (char)((bm >> j) & 1);
+        }
+    }
+
+    /* Optional: encode V/UV flags into bb[1..2][...]. We don't have a
+     * good mapping from imbe_vocoder's output, so we leave them zero
+     * which produces "all voiced" — acceptable for speech, slight
+     * artifact on sibilants. */
+
+    /* Pack imbe_d as 88 single-bit chars first, then collapse to bytes. */
+    char imbe_d[88];
+    std::memset(imbe_d, 0, sizeof(imbe_d));
+
+    /* b0: 8 bits split. Bits 7..2 -> imbe_d[0..5]; bits 1..0 -> imbe_d[85..86].
+     * mbelib's decode reconstructs b0 via strtol with the same ordering. */
+    uint32_t b0 = (uint32_t)(uint16_t)fv[0] & 0xFF;
+    imbe_d[0] = (char)((b0 >> 7) & 1);
+    imbe_d[1] = (char)((b0 >> 6) & 1);
+    imbe_d[2] = (char)((b0 >> 5) & 1);
+    imbe_d[3] = (char)((b0 >> 4) & 1);
+    imbe_d[4] = (char)((b0 >> 3) & 1);
+    imbe_d[5] = (char)((b0 >> 2) & 1);
+    imbe_d[85] = (char)((b0 >> 1) & 1);
+    imbe_d[86] = (char)((b0 >> 0) & 1);
+
+    /* Use bo[L9][k] to scatter bb[r][c] into imbe_d[6..84] (79 positions). */
+    for (int k = 0; k < 79; k++) {
+        int r = bo[L9][k][0];
+        int c = bo[L9][k][1];
+        if (r >= 0 && r < 58 && c >= 0 && c < 12) {
+            imbe_d[6 + k] = bb[r][c];
+        }
+    }
+    /* imbe_d[87] (the last position) is a parity / reserved bit — leave 0. */
+
+    /* Collapse 88 single-bit chars into 11 bytes MSB-first. */
     std::memset(imbe_11b, 0, 11);
-    for (int i = 0; i < 8; i++) {
-        set_bits(imbe_11b, B_OFFSETS[i], B_WIDTHS[i], (uint32_t)b_vec[i]);
+    for (int i = 0; i < 88; i++) {
+        if (imbe_d[i]) {
+            imbe_11b[i / 8] |= (uint8_t)(1u << (7 - (i % 8)));
+        }
     }
 }
 

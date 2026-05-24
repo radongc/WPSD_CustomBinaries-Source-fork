@@ -108,6 +108,18 @@ if [ ! -f "$IMBE_VOC_SRC/build/libimbe_vocoder.a" ]; then
     cmake --build "$IMBE_VOC_SRC/build" -j"$(nproc)"
 fi
 
+# Copy mbelib's IMBE bit-layout tables into our wrapper dir so the
+# encode side can mirror exactly what mbelib's decoder expects. We sed in
+# 'static' on the const declarations to avoid multiple-definition issues
+# if libmbe.so's TUs ever export the same symbols.
+MBELIB_CONST_SRC=/opt/mbelib/imbe7200x4400_const.h
+MBELIB_CONST_DEST="$REPO_DIR/imbe_native/mbelib_imbe_const.h"
+if [ -f "$MBELIB_CONST_SRC" ]; then
+    sed -e 's/^const float \(quantstep\|standdev\|B2\|ba\)/static const float \1/' \
+        -e 's/^const int \(bo\|hoba\|ImbeJi\)/static const int \1/' \
+        "$MBELIB_CONST_SRC" > "$MBELIB_CONST_DEST"
+fi
+
 ( cd "$REPO_DIR/imbe_native"
   make clean
   make IMBE_VOC_DIR="$IMBE_VOC_SRC"

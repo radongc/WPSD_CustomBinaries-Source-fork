@@ -54,21 +54,14 @@ void aibridge_imbe_decode(aibridge_imbe_ctx *ctx,
 
     int errs = 0, errs2 = 0;
     char err_str[64] = {0};
-    float aout[160];
 
     /* uvquality: 0-255, controls unvoiced-band whitening; 3 is the
-     * common DSD/OP25 default for natural-sounding speech. */
-    mbe_processImbe4400Data(aout, &errs, &errs2, err_str, imbe_bits,
+     * common DSD/OP25 default for natural-sounding speech.
+     * mbe_processImbe4400Data writes 160 int16 samples directly into
+     * the output buffer — no float conversion needed. */
+    mbe_processImbe4400Data(pcm_160, &errs, &errs2, err_str, imbe_bits,
                             &ctx->cur_mp, &ctx->prev_mp,
                             &ctx->prev_mp_enhanced, 3);
-
-    /* Float samples -> int16 with clipping. */
-    for (int i = 0; i < 160; i++) {
-        float s = aout[i];
-        if (s > 32767.0f) s = 32767.0f;
-        else if (s < -32768.0f) s = -32768.0f;
-        pcm_160[i] = (int16_t)s;
-    }
 }
 
 /* Encode 160 int16 PCM samples -> 11 bytes IMBE.

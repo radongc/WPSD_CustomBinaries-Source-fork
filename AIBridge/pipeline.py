@@ -38,7 +38,7 @@ class STT(Protocol):
 
 
 class LLM(Protocol):
-    def respond(self, user_text: str) -> str: ...
+    def respond(self, user_text: str, conversation_id: str = "default") -> str: ...
 
 
 class TTS(Protocol):
@@ -61,8 +61,8 @@ class MockLLM:
     def __init__(self, system_prompt: str = "") -> None:
         self.system_prompt = system_prompt
 
-    def respond(self, user_text: str) -> str:
-        log.info("MockLLM: %r → echo", user_text)
+    def respond(self, user_text: str, conversation_id: str = "default") -> str:
+        log.info("MockLLM[%s]: %r → echo", conversation_id, user_text)
         return f"You said: {user_text}. This is the mock bot."
 
 
@@ -131,7 +131,16 @@ class WhisperCppSTT:
 @dataclass
 class ClaudeLLM:
     """
-    Anthropic Claude API client. Uses the modern Anthropic Python SDK.
+    Anthropic Claude API client with per-conversation memory.
+
+    Memory model:
+      - Keyed by conversation_id (typically the radio's src_id).
+      - Auto-reset after `idle_reset_sec` of silence on that channel — by
+        default 600 sec (10 min). Matches how a real voice conversation
+        naturally ends if nobody keys up.
+      - Capped at `max_turns` user+assistant pairs (default 20 → ~10 of each).
+        When full, drop the oldest turn pair.
+      - In-memory only; reset on bridge restart.
 
     Pip install: `anthropic` (>=0.40.0)
     """
@@ -143,25 +152,54 @@ class ClaudeLLM:
         "when heard aloud — under 40 words. No code blocks, no markdown."
     )
     max_tokens: int = 200
+    idle_reset_sec: float = 600.0
+    max_turns: int = 20
 
     def __post_init__(self) -> None:
         # Lazy import so the module can be loaded without anthropic installed.
         from anthropic import Anthropic
         self._client = Anthropic(api_key=self.api_key)
+        # conversation_id -> list of {"role": ..., "content": ...} dicts
+        self._histories: dict[str, list[dict]] = {}
+        # conversation_id -> monotonic timestamp of last activity
+        self._last_seen: dict[str, float] = {}
 
-    def respond(self, user_text: str) -> str:
+    def respond(self, user_text: str, conversation_id: str = "default") -> str:
         if not user_text.strip():
             return "I didn't catch that. Try again?"
+
+        # Apply idle reset.
+        now = time.monotonic()
+        prior = self._last_seen.get(conversation_id, 0.0)
+        if prior and (now - prior) > self.idle_reset_sec:
+            log.info("Claude[%s]: idle %.0fs, resetting context",
+                     conversation_id, now - prior)
+            self._histories.pop(conversation_id, None)
+
+        history = self._histories.setdefault(conversation_id, [])
+        history.append({"role": "user", "content": user_text})
+
         t0 = time.monotonic()
         resp = self._client.messages.create(
             model=self.model,
             max_tokens=self.max_tokens,
             system=self.system_prompt,
-            messages=[{"role": "user", "content": user_text}],
+            messages=history,
         )
         elapsed = time.monotonic() - t0
         text = "".join(b.text for b in resp.content if b.type == "text").strip()
-        log.info("Claude: %.2fs, %d chars", elapsed, len(text))
+
+        # Append the assistant's reply and trim if over cap.
+        history.append({"role": "assistant", "content": text})
+        if len(history) > self.max_turns:
+            # Drop oldest user+assistant pair (keep the list even-length).
+            del history[:2]
+            log.debug("Claude[%s]: trimmed to %d turns",
+                      conversation_id, len(history))
+
+        self._last_seen[conversation_id] = now
+        log.info("Claude[%s]: %.2fs, %d chars, %d turns in context",
+                 conversation_id, elapsed, len(text), len(history))
         return text
 
 
@@ -216,10 +254,13 @@ class Pipeline:
     llm: LLM
     tts: TTS
 
-    def run(self, pcm_in: bytes) -> Optional[bytes]:
+    def run(self, pcm_in: bytes, conversation_id: str = "default") -> Optional[bytes]:
         """
         Full PCM-in → PCM-out round trip. Returns None if any stage fails
         or yields empty (so the caller can skip TX).
+
+        `conversation_id` flows through to the LLM so it can maintain
+        per-user memory. Typically the caller passes the radio's src_id.
         """
         if not pcm_in:
             return None
@@ -234,7 +275,7 @@ class Pipeline:
             return None  # nothing said, nothing to answer
 
         try:
-            text_out = self.llm.respond(text_in)
+            text_out = self.llm.respond(text_in, conversation_id=conversation_id)
         except Exception:
             log.exception("LLM failed")
             return None

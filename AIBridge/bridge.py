@@ -209,9 +209,14 @@ class Bridge:
                 self.state = State.PROCESSING
                 self.tx_abort.clear()
 
+            # Use the transmitting radio's src_id as the conversation key so
+            # the LLM gives each radio its own memory thread. Fall back to
+            # "anon" if MMDVMHost didn't surface the source ID for some reason.
+            conv_id = str(buf.meta.src_id) if buf.meta.src_id else "anon"
+
             try:
                 pcm_in = imbe_codec.imbe_frames_to_pcm(buf.imbe_frames, self.codec)
-                pcm_out = self.pipeline.run(pcm_in)
+                pcm_out = self.pipeline.run(pcm_in, conversation_id=conv_id)
             except Exception:
                 log.exception("Pipeline crashed")
                 pcm_out = None

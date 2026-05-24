@@ -216,69 +216,193 @@ class Bridge:
 
             try:
                 pcm_in = imbe_codec.imbe_frames_to_pcm(buf.imbe_frames, self.codec)
-                pcm_out = self.pipeline.run(pcm_in, conversation_id=conv_id)
+                chunks = self.pipeline.run_stream(pcm_in, conversation_id=conv_id)
+                self._transmit_pcm_stream(chunks)
             except Exception:
-                log.exception("Pipeline crashed")
-                pcm_out = None
-
-            if pcm_out:
-                self._transmit_pcm(pcm_out)
+                log.exception("Pipeline / TX failed")
 
             with self.state_lock:
-                if self.state == State.PROCESSING:
+                if self.state in (State.PROCESSING, State.TX):
                     self.state = State.IDLE
 
     # ─── TX path ──────────────────────────────────────────────────────────
 
-    def _transmit_pcm(self, pcm: bytes) -> None:
-        """Stream PCM out as P25 LDU1/LDU2 packets to MMDVMHost."""
+    # PCM framing constants. 8 kHz / 16-bit / mono → 320 bytes per 20 ms IMBE
+    # frame, and P25 LDU1/LDU2 carries 9 frames each (180 ms of audio).
+    _FRAME_PCM_BYTES = 320
+    _LDU_FRAMES = 9
+    _LDU_PCM_BYTES = _LDU_FRAMES * _FRAME_PCM_BYTES   # 2880
+    # How long to wait for the very first PCM byte before giving up. TTS
+    # warmup + first LLM sentence on a Pi can comfortably take 5+ sec.
+    _PREBUFFER_TIMEOUT_S = 10.0
+
+    def _transmit_pcm_stream(self, chunks_iter) -> None:
+        """
+        Stream PCM out as P25 LDU1/LDU2 packets to MMDVMHost, consuming
+        from a PCM-chunk iterator (pipeline.run_stream).
+
+        A producer thread drains the iterator into a queue so LLM/TTS
+        latency can't stall TX pacing. If the queue underruns mid-call
+        we pad the current LDU with silence rather than letting the
+        radio drop the call.
+
+        We don't transition to State.TX (and don't key the radio) until
+        the first PCM byte actually arrives — avoids leading dead air
+        during the LLM/TTS warmup.
+        """
         if self.mmdvm_addr is None:
             log.warning("No MMDVMHost peer known yet; can't TX")
+            self._close_iter(chunks_iter)
             return
 
-        with self.state_lock:
-            if self.tx_abort.is_set():
-                return
-            self.state = State.TX
+        pcm_q: queue.Queue = queue.Queue()
+        producer_done_sentinel = object()
+        producer_stop = threading.Event()
 
-        frames = imbe_codec.pcm_to_imbe_frames(pcm, self.codec)
-        # Pad up to a multiple of 9 frames per LDU; trailing silence is fine.
-        while len(frames) % 9:
-            frames.append(self.codec.encode(b"\x00" * 320))
+        def producer() -> None:
+            try:
+                for chunk in chunks_iter:
+                    if producer_stop.is_set() or self.tx_abort.is_set():
+                        break
+                    if chunk:
+                        pcm_q.put(chunk)
+            except Exception:
+                log.exception("PCM producer thread crashed")
+            finally:
+                pcm_q.put(producer_done_sentinel)
+                # Closing the upstream generator triggers its finally
+                # blocks (rolls back LLM history, kills Piper/sox).
+                self._close_iter(chunks_iter)
 
-        # Bot identity for TX.
-        meta = p25.TransmissionMeta(
-            src_id=self.bot_src_id,
-            dst_id=self.bot_dst_id,
-            lcf=self.bot_lcf,
-            mfid=self.bot_mfid,
-            alg_id=0x80,  # CLEAR
-        )
+        prod = threading.Thread(target=producer, name="pcm-producer", daemon=True)
+        prod.start()
 
-        log.info("TX start: %d frames (%.2fs)", len(frames), len(frames) * 0.020)
+        silence_frame = b"\x00" * self._FRAME_PCM_BYTES
+        buf = bytearray()
+        producer_done = False
 
-        toggle_ldu1 = True  # alternate LDU1 / LDU2
         try:
-            for i in range(0, len(frames), 9):
+            # ─── Prebuffer: wait for first PCM before keying up. ────────
+            deadline = time.monotonic() + self._PREBUFFER_TIMEOUT_S
+            while not buf and not producer_done:
+                if self.tx_abort.is_set():
+                    return
+                remaining = deadline - time.monotonic()
+                if remaining <= 0:
+                    log.warning("TX prebuffer timeout (%.1fs); nothing to send",
+                                self._PREBUFFER_TIMEOUT_S)
+                    return
+                try:
+                    item = pcm_q.get(timeout=min(remaining, 0.5))
+                except queue.Empty:
+                    continue
+                if item is producer_done_sentinel:
+                    producer_done = True
+                    break
+                buf.extend(item)
+
+            if not buf:
+                log.info("TX stream: no PCM produced; nothing to send")
+                return
+
+            # We have audio — key up.
+            with self.state_lock:
+                if self.tx_abort.is_set():
+                    return
+                self.state = State.TX
+
+            meta = p25.TransmissionMeta(
+                src_id=self.bot_src_id,
+                dst_id=self.bot_dst_id,
+                lcf=self.bot_lcf,
+                mfid=self.bot_mfid,
+                alg_id=0x80,  # CLEAR
+            )
+            log.info("TX stream start")
+            t0 = time.monotonic()
+            toggle_ldu1 = True
+            total_frames = 0
+
+            # ─── Steady-state TX loop. ─────────────────────────────────
+            while True:
                 if self.tx_abort.is_set():
                     log.info("TX aborted mid-stream")
                     return
-                chunk = frames[i:i + 9]
-                packets = (p25.build_ldu1(chunk, meta)
+
+                # Top buf up toward one LDU's worth of PCM.
+                while len(buf) < self._LDU_PCM_BYTES and not producer_done:
+                    try:
+                        item = pcm_q.get(timeout=0.05)
+                    except queue.Empty:
+                        break  # underrun — silence-pad below
+                    if item is producer_done_sentinel:
+                        producer_done = True
+                        break
+                    buf.extend(item)
+
+                if not buf:
+                    break  # cleanly finished
+
+                # Build one LDU. Pad with silence if short (final partial
+                # or transient underrun mid-stream).
+                if len(buf) >= self._LDU_PCM_BYTES:
+                    pcm_ldu = bytes(buf[:self._LDU_PCM_BYTES])
+                    del buf[:self._LDU_PCM_BYTES]
+                else:
+                    pcm_ldu = bytes(buf) + b"\x00" * (self._LDU_PCM_BYTES - len(buf))
+                    buf.clear()
+
+                frames = imbe_codec.pcm_to_imbe_frames(pcm_ldu, self.codec)
+                # Defensive: the encoder should give us exactly 9 frames
+                # for 9 frames' worth of PCM, but pad if not.
+                while len(frames) < self._LDU_FRAMES:
+                    frames.append(self.codec.encode(silence_frame))
+                frames = frames[:self._LDU_FRAMES]
+
+                packets = (p25.build_ldu1(frames, meta)
                            if toggle_ldu1
-                           else p25.build_ldu2(chunk, meta))
+                           else p25.build_ldu2(frames, meta))
                 toggle_ldu1 = not toggle_ldu1
+                total_frames += self._LDU_FRAMES
 
                 for pkt in packets:
+                    if self.tx_abort.is_set():
+                        log.info("TX aborted mid-stream")
+                        return
                     self.sock.sendto(pkt, self.mmdvm_addr)
-                    # Pace at roughly real-time so MMDVMHost's modem queue
-                    # doesn't have to absorb 5 sec of audio in one gulp.
+                    # Pace at roughly real-time so MMDVMHost's modem
+                    # queue doesn't have to absorb the whole call in
+                    # one gulp.
                     time.sleep(INTER_PACKET_DELAY_S)
 
             self.sock.sendto(p25.build_end_record(), self.mmdvm_addr)
-            log.info("TX end")
+            elapsed = time.monotonic() - t0
+            log.info("TX stream end: %d frames (%.2fs audio, %.2fs wall)",
+                     total_frames, total_frames * 0.020, elapsed)
         except Exception:
-            log.exception("TX failed")
+            log.exception("TX stream failed")
+        finally:
+            # Signal producer to stop, drain queue so it can exit, then
+            # join. Producer's own finally will close the iterator.
+            producer_stop.set()
+            drain_deadline = time.monotonic() + 5.0
+            while prod.is_alive() and time.monotonic() < drain_deadline:
+                try:
+                    pcm_q.get(timeout=0.2)
+                except queue.Empty:
+                    pass
+            prod.join(timeout=5.0)
+
+    @staticmethod
+    def _close_iter(it) -> None:
+        """Best-effort close of an iterator (no-op if it isn't a generator)."""
+        close = getattr(it, "close", None)
+        if close is None:
+            return
+        try:
+            close()
+        except Exception:
+            log.debug("iterator close raised", exc_info=True)
 
     # ─── lifecycle ────────────────────────────────────────────────────────
 

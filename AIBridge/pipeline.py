@@ -1,29 +1,29 @@
 """
 Voice pipeline: PCM in → STT → LLM → TTS → PCM out.
 
-Implementations are pluggable. The defaults are:
-  STT: whisper.cpp via subprocess (small.en model)
-  LLM: Anthropic Claude API (Haiku for speed)
-  TTS: Piper via subprocess (en_US-amy-medium voice or whatever's installed)
+Two interfaces:
+  - run(pcm_in) -> bytes      (legacy, blocking, returns full PCM)
+  - run_stream(pcm_in) -> Iterator[bytes]   (streaming, yields PCM chunks)
 
-A "mock" implementation of each is provided that lets the rest of the
-bridge be exercised without those deps present.
+The streaming path lets the bridge start transmitting as soon as the first
+sentence has been TTS-rendered, instead of waiting for the entire LLM
+response + TTS render to complete before TX begins. For long responses
+this hides several seconds of latency under TX.
 
 Audio convention everywhere here: 8 kHz, mono, signed 16-bit, little-endian
-PCM. Matches the IMBE codec's expectations on both sides. If a real STT or
-TTS produces different sample rates, the wrapper here is responsible for
-the resample.
+PCM. Matches the IMBE codec on both sides.
 """
 
 from __future__ import annotations
 import logging
 import os
+import re
 import subprocess
 import tempfile
 import time
 import wave
 from dataclasses import dataclass
-from typing import Optional, Protocol
+from typing import Iterator, Optional, Protocol
 
 log = logging.getLogger("aibridge.pipeline")
 
@@ -61,6 +61,12 @@ def _handle_voice_command(text: str, llm, conversation_id: str) -> Optional[str]
     return None
 
 
+# Match sentence-ending punctuation (., !, ?, \n) followed by whitespace
+# or end of string. Used to chunk streaming LLM output into TTS-sized
+# pieces — TTS quality is generally better per-sentence than per-token.
+_SENTENCE_END = re.compile(r"[.!?\n](?:\s|$)")
+
+
 # ─── interfaces ────────────────────────────────────────────────────────────
 
 class STT(Protocol):
@@ -69,12 +75,17 @@ class STT(Protocol):
 
 class LLM(Protocol):
     def respond(self, user_text: str, conversation_id: str = "default") -> str: ...
+    def respond_stream(self, user_text: str, conversation_id: str = "default") -> Iterator[str]: ...
     def reset_conversation(self, conversation_id: str = "default") -> None: ...
 
 
 class TTS(Protocol):
     def synthesize(self, text: str) -> bytes:
-        """Returns 8 kHz / 16-bit / mono PCM bytes."""
+        """Returns 8 kHz / 16-bit / mono PCM bytes (whole response)."""
+        ...
+
+    def synthesize_stream(self, text: str) -> Iterator[bytes]:
+        """Yields 8 kHz / 16-bit / mono PCM chunks as they're produced."""
         ...
 
 
@@ -82,7 +93,6 @@ class TTS(Protocol):
 
 class MockSTT:
     def transcribe(self, pcm: bytes) -> str:
-        # Approximate length so the mock response feels right.
         secs = len(pcm) / (PCM_SAMPLE_RATE * 2)
         log.info("MockSTT: %.1fs of audio → 'hello there'", secs)
         return "hello there"
@@ -96,6 +106,10 @@ class MockLLM:
         log.info("MockLLM[%s]: %r → echo", conversation_id, user_text)
         return f"You said: {user_text}. This is the mock bot."
 
+    def respond_stream(self, user_text: str, conversation_id: str = "default") -> Iterator[str]:
+        # Single-shot stream — yield the whole canned response as one sentence.
+        yield self.respond(user_text, conversation_id)
+
     def reset_conversation(self, conversation_id: str = "default") -> None:
         log.info("MockLLM[%s]: reset (no-op)", conversation_id)
 
@@ -105,11 +119,11 @@ class MockTTS:
     Generates a short tone-pip so we can hear something arrive on the radio
     even before real TTS is wired up.
     """
-    def synthesize(self, text: str) -> bytes:
+    def _make_tone(self, text: str) -> bytes:
         import math
         log.info("MockTTS: %d chars → 1 sec sine wave", len(text))
-        n = PCM_SAMPLE_RATE  # 1 second
-        amp = 8000  # quiet; full int16 range is ±32767
+        n = PCM_SAMPLE_RATE
+        amp = 8000
         freq = 440
         samples = bytearray()
         for i in range(n):
@@ -117,19 +131,18 @@ class MockTTS:
             samples += int(v).to_bytes(2, "little", signed=True)
         return bytes(samples)
 
+    def synthesize(self, text: str) -> bytes:
+        return self._make_tone(text)
+
+    def synthesize_stream(self, text: str) -> Iterator[bytes]:
+        # Yield the whole tone as one chunk — mocks don't pretend to stream.
+        yield self._make_tone(text)
+
 
 # ─── real implementations (lightweight subprocess wrappers) ────────────────
 
 @dataclass
 class WhisperCppSTT:
-    """
-    Shells out to the whisper.cpp `whisper-cli` binary (cmake-built layout
-    used by current whisper.cpp; the old `make main` flow no longer exists).
-
-    Requires:
-      - whisper.cpp built on the Pi (default location: /opt/whisper.cpp)
-      - a model downloaded (default: ggml-small.en.bin)
-    """
     binary: str = "/opt/whisper.cpp/build/bin/whisper-cli"
     model_path: str = "/opt/whisper.cpp/models/ggml-small.en.bin"
     threads: int = 4
@@ -165,18 +178,20 @@ class WhisperCppSTT:
 @dataclass
 class ClaudeLLM:
     """
-    Anthropic Claude API client with per-conversation memory.
+    Anthropic Claude API client with per-conversation memory and streaming.
 
     Memory model:
       - Keyed by conversation_id (typically the radio's src_id).
-      - Auto-reset after `idle_reset_sec` of silence on that channel — by
-        default 600 sec (10 min). Matches how a real voice conversation
-        naturally ends if nobody keys up.
-      - Capped at `max_turns` user+assistant pairs (default 20 → ~10 of each).
-        When full, drop the oldest turn pair.
+      - Auto-reset after `idle_reset_sec` (default 600s) of channel silence.
+      - Capped at `max_turns` user+assistant pairs (default 20).
       - In-memory only; reset on bridge restart.
 
-    Pip install: `anthropic` (>=0.40.0)
+    Streaming model:
+      - respond_stream() yields complete sentences as they form.
+      - respond() is now a thin wrapper that drains the stream.
+      - If the generator is closed early (consumer abandons it), the
+        partial response is discarded and the user turn is rolled back —
+        history stays alternating and consistent.
     """
     api_key: str
     model: str = "claude-haiku-4-5-20251001"
@@ -190,19 +205,22 @@ class ClaudeLLM:
     max_turns: int = 20
 
     def __post_init__(self) -> None:
-        # Lazy import so the module can be loaded without anthropic installed.
         from anthropic import Anthropic
         self._client = Anthropic(api_key=self.api_key)
-        # conversation_id -> list of {"role": ..., "content": ...} dicts
         self._histories: dict[str, list[dict]] = {}
-        # conversation_id -> monotonic timestamp of last activity
         self._last_seen: dict[str, float] = {}
 
     def respond(self, user_text: str, conversation_id: str = "default") -> str:
-        if not user_text.strip():
-            return "I didn't catch that. Try again?"
+        """Blocking call — fully drains the stream and joins all sentences."""
+        sentences = list(self.respond_stream(user_text, conversation_id))
+        return " ".join(sentences).strip()
 
-        # Apply idle reset.
+    def respond_stream(self, user_text: str, conversation_id: str = "default") -> Iterator[str]:
+        if not user_text.strip():
+            yield "I didn't catch that. Try again?"
+            return
+
+        # Apply idle reset before adding the new turn.
         now = time.monotonic()
         prior = self._last_seen.get(conversation_id, 0.0)
         if prior and (now - prior) > self.idle_reset_sec:
@@ -212,34 +230,62 @@ class ClaudeLLM:
 
         history = self._histories.setdefault(conversation_id, [])
         history.append({"role": "user", "content": user_text})
+        user_msg_idx = len(history) - 1
 
+        full_text_parts: list[str] = []
+        sentence_buf = ""
         t0 = time.monotonic()
-        resp = self._client.messages.create(
-            model=self.model,
-            max_tokens=self.max_tokens,
-            system=self.system_prompt,
-            messages=history,
-        )
-        elapsed = time.monotonic() - t0
-        text = "".join(b.text for b in resp.content if b.type == "text").strip()
 
-        # Append the assistant's reply and trim if over cap.
-        history.append({"role": "assistant", "content": text})
-        if len(history) > self.max_turns:
-            # Drop oldest user+assistant pair (keep the list even-length).
-            del history[:2]
-            log.debug("Claude[%s]: trimmed to %d turns",
-                      conversation_id, len(history))
+        try:
+            with self._client.messages.stream(
+                model=self.model,
+                max_tokens=self.max_tokens,
+                system=self.system_prompt,
+                messages=history,
+            ) as stream:
+                for delta_text in stream.text_stream:
+                    sentence_buf += delta_text
+                    # Drain complete sentences out of the buffer.
+                    while True:
+                        match = _SENTENCE_END.search(sentence_buf)
+                        if not match:
+                            break
+                        end = match.end()
+                        sentence = sentence_buf[:end].strip()
+                        sentence_buf = sentence_buf[end:]
+                        if sentence:
+                            full_text_parts.append(sentence)
+                            yield sentence
 
-        self._last_seen[conversation_id] = now
-        log.info("Claude[%s]: %.2fs, %d chars, %d turns in context",
-                 conversation_id, elapsed, len(text), len(history))
-        return text
+            # Stream done — flush trailing partial (last sentence may not
+            # have terminal punctuation).
+            remainder = sentence_buf.strip()
+            if remainder:
+                full_text_parts.append(remainder)
+                yield remainder
+
+        finally:
+            # Runs on normal completion AND on GeneratorExit (consumer
+            # abandoned us mid-stream). Update history accordingly.
+            elapsed = time.monotonic() - t0
+            full_text = " ".join(full_text_parts).strip()
+
+            if full_text:
+                history.append({"role": "assistant", "content": full_text})
+                if len(history) > self.max_turns:
+                    del history[:2]
+                self._last_seen[conversation_id] = now
+                log.info("Claude[%s] stream: %.2fs, %d chars, %d turns in context",
+                         conversation_id, elapsed, len(full_text), len(history))
+            else:
+                # Nothing emitted — roll back the user message so the
+                # alternation invariant holds for the next request.
+                if user_msg_idx < len(history) and history[user_msg_idx]["role"] == "user":
+                    del history[user_msg_idx:]
+                log.info("Claude[%s] stream: aborted with no output (%.2fs)",
+                         conversation_id, elapsed)
 
     def reset_conversation(self, conversation_id: str = "default") -> None:
-        """Drop the history for one conversation. Last-seen stays untouched
-        so the idle-reset clock starts from the next message rather than
-        immediately re-triggering."""
         if conversation_id in self._histories:
             log.info("Claude[%s]: manual reset, %d turns dropped",
                      conversation_id, len(self._histories[conversation_id]))
@@ -249,25 +295,37 @@ class ClaudeLLM:
 @dataclass
 class PiperTTS:
     """
-    Shells out to the Piper CLI. Piper outputs PCM on stdout when given
-    `--output-raw`. Voice models are 22050 Hz typically; we resample to 8 kHz
-    via sox (apt-get install sox).
+    Shells out to Piper (PCM on stdout via --output-raw) piped through sox
+    for resample + gain. Both synthesize() (blocking) and
+    synthesize_stream() (incremental) are supported. The streaming variant
+    is what the bridge uses; the blocking one is kept for testing and
+    backward compatibility.
     """
     binary: str = "piper"
-    voice_path: str = "/opt/piper/voices/en_US-amy-medium.onnx"
+    voice_path: str = "/opt/piper/voices/en_US-ryan-medium.onnx"
     voice_rate: int = 22050
 
+    # Read this many bytes per sox.stdout.read() call. 8192 bytes = ~0.5s
+    # of 8 kHz / 16-bit PCM, which is small enough for responsive TX
+    # start and large enough to avoid syscall thrash.
+    _CHUNK_BYTES: int = 8192
+
     def synthesize(self, text: str) -> bytes:
+        """Blocking — drains the stream into a single bytes buffer."""
+        return b"".join(self.synthesize_stream(text))
+
+    def synthesize_stream(self, text: str) -> Iterator[bytes]:
+        """Yields PCM chunks as Piper produces them. ~0.5s of audio per
+        chunk by default. Subprocesses are killed cleanly if the consumer
+        abandons the generator mid-stream."""
         t0 = time.monotonic()
         piper = subprocess.Popen(
             [self.binary, "--model", self.voice_path, "--output-raw"],
             stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
         )
-        # gain -6: drop 6 dB to leave headroom — Piper output is hot enough
-        # that IMBE encoding clips on peaks, which the radio renders as the
-        # "loud and muffled" artifact. -6 dB sounds about right empirically.
-        # rate -v: highest-quality resampler. Default sox rate is lower
-        # quality, costing high-frequency detail when downsampling 22050 → 8000.
+        # gain -6: 6 dB headroom prevents IMBE clipping on Piper peaks.
+        # rate -v: high-quality downsample 22050 → 8000 (preserves more
+        # high-frequency detail than sox's default resampler).
         sox = subprocess.Popen(
             ["sox", "-t", "raw", "-r", str(self.voice_rate), "-e", "signed",
              "-b", "16", "-c", "1", "-",
@@ -277,34 +335,47 @@ class PiperTTS:
             stdin=piper.stdout, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
         )
         if piper.stdout:
-            piper.stdout.close()  # so sox sees EOF when piper finishes
+            piper.stdout.close()  # sox owns it now; we need the FD released
+
         piper_stdin = piper.stdin
         assert piper_stdin is not None
         piper_stdin.write(text.encode("utf-8"))
         piper_stdin.close()
-        # Generous timeout — "high" quality Piper voices on Pi-class CPUs
-        # render at ~2x the rate of medium voices, and a chatty 200+ char
-        # Claude response can take 10-20s. 60s gives plenty of headroom.
-        try:
-            pcm, sox_err = sox.communicate(timeout=60)
-            piper.wait(timeout=60)
-        except subprocess.TimeoutExpired:
-            # Kill both processes so we don't leak zombies, then surface
-            # whatever Piper printed to stderr — usually tells us if the
-            # model file is corrupt, sample rate is wrong, etc.
-            sox.kill()
-            piper.kill()
-            _, piper_err = piper.communicate()
-            log.error("Piper+sox timed out after 60s. Piper stderr: %s",
-                      piper_err.decode("utf-8", errors="replace")[:500])
-            raise
 
-        elapsed = time.monotonic() - t0
-        if sox.returncode != 0:
-            log.warning("sox returned %d: %s", sox.returncode,
-                        sox_err.decode("utf-8", errors="replace")[:200])
-        log.info("Piper+sox: %.2fs, %d bytes PCM", elapsed, len(pcm))
-        return pcm
+        total_bytes = 0
+        try:
+            assert sox.stdout is not None
+            while True:
+                chunk = sox.stdout.read(self._CHUNK_BYTES)
+                if not chunk:
+                    break
+                total_bytes += len(chunk)
+                yield chunk
+
+            # Stream drained — let the processes exit cleanly.
+            try:
+                sox.wait(timeout=10)
+                piper.wait(timeout=10)
+            except subprocess.TimeoutExpired:
+                log.warning("Piper/sox didn't exit cleanly after stream end")
+
+            elapsed = time.monotonic() - t0
+            if sox.returncode != 0 and sox.stderr is not None:
+                err = sox.stderr.read().decode("utf-8", errors="replace")[:200]
+                log.warning("sox returned %d: %s", sox.returncode, err)
+            log.info("Piper+sox stream: %.2fs, %d bytes PCM (%.1fs audio)",
+                     elapsed, total_bytes,
+                     total_bytes / (PCM_SAMPLE_RATE * 2))
+        finally:
+            # On GeneratorExit (consumer abandoned the stream) or any
+            # exception, make sure both subprocesses are reaped.
+            for proc in (sox, piper):
+                if proc.poll() is None:
+                    proc.kill()
+                    try:
+                        proc.communicate(timeout=5)
+                    except (subprocess.TimeoutExpired, ValueError):
+                        pass
 
 
 # ─── pipeline orchestrator ─────────────────────────────────────────────────
@@ -316,64 +387,75 @@ class Pipeline:
     tts: TTS
 
     def run(self, pcm_in: bytes, conversation_id: str = "default") -> Optional[bytes]:
-        """
-        Full PCM-in → PCM-out round trip. Returns None if any stage fails
-        or yields empty (so the caller can skip TX).
+        """Blocking — drains the stream into a single bytes buffer.
+        Returns None on any failure or empty result."""
+        chunks = list(self.run_stream(pcm_in, conversation_id))
+        if not chunks:
+            return None
+        return b"".join(chunks)
 
-        `conversation_id` flows through to the LLM so it can maintain
-        per-user memory. Typically the caller passes the radio's src_id.
+    def run_stream(self, pcm_in: bytes, conversation_id: str = "default") -> Iterator[bytes]:
+        """
+        Full STT → LLM → TTS streamed end-to-end. Yields PCM chunks as
+        they become available. First chunk arrives once the first LLM
+        sentence has been TTS-rendered, NOT after the whole response —
+        this is what lets the bridge start TX early.
+
+        Yields nothing (empty iterator) if STT returns empty, LLM
+        produces no text, or any stage raises.
         """
         if not pcm_in:
-            return None
+            return
 
         try:
             text_in = self.stt.transcribe(pcm_in)
         except Exception:
             log.exception("STT failed")
-            return None
+            return
         log.info("STT → %r", text_in)
         if not text_in.strip():
-            return None  # nothing said, nothing to answer
+            return
 
-        # Voice commands handled locally before the LLM gets the text.
+        # Voice commands intercept before the LLM gets the text.
         cmd_reply = _handle_voice_command(text_in, self.llm, conversation_id)
         if cmd_reply is not None:
-            text_out = cmd_reply
-        else:
+            log.info("LLM → %r (voice command)", cmd_reply)
             try:
-                text_out = self.llm.respond(text_in, conversation_id=conversation_id)
+                yield from self.tts.synthesize_stream(cmd_reply)
             except Exception:
-                log.exception("LLM failed")
-                return None
-        log.info("LLM → %r", text_out)
-        if not text_out.strip():
-            return None
+                log.exception("TTS failed for voice command")
+            return
 
+        # Stream LLM sentences → TTS chunks → caller.
         try:
-            pcm_out = self.tts.synthesize(text_out)
+            for sentence in self.llm.respond_stream(text_in, conversation_id=conversation_id):
+                log.info("LLM → %r", sentence)
+                try:
+                    yield from self.tts.synthesize_stream(sentence)
+                except Exception:
+                    log.exception("TTS failed for sentence; skipping and continuing")
+                    continue
         except Exception:
-            log.exception("TTS failed")
-            return None
-        log.info("TTS → %d bytes PCM", len(pcm_out))
-        return pcm_out
+            log.exception("LLM stream failed")
 
 
 def build_pipeline(cfg: dict) -> Pipeline:
-    """
-    Construct the pipeline from a config dict. Each section can be set
-    to "mock" to use the no-op variant — handy for offline testing.
-    """
-    stt_cfg = cfg.get("stt", {})
+    """Construct the pipeline from a config dict."""
+
+    def section(name: str) -> dict:
+        return cfg.get(name) or {}
+
+    stt_cfg = section("stt")
     if stt_cfg.get("kind", "whisper") == "mock":
         stt: STT = MockSTT()
     else:
         stt = WhisperCppSTT(
-            binary=stt_cfg.get("binary", "/opt/whisper.cpp/main"),
-            model_path=stt_cfg.get("model_path", "/opt/whisper.cpp/models/ggml-small.en.bin"),
+            binary=stt_cfg.get("binary", "/opt/whisper.cpp/build/bin/whisper-cli"),
+            model_path=stt_cfg.get("model_path", "/opt/whisper.cpp/models/ggml-base.en.bin"),
             threads=int(stt_cfg.get("threads", 4)),
         )
 
-    llm_cfg = cfg.get("llm", {})
+    llm_cfg = section("llm")
     if llm_cfg.get("kind", "claude") == "mock":
         llm: LLM = MockLLM(system_prompt=llm_cfg.get("system_prompt", ""))
     else:
@@ -384,13 +466,13 @@ def build_pipeline(cfg: dict) -> Pipeline:
             max_tokens=int(llm_cfg.get("max_tokens", 200)),
         )
 
-    tts_cfg = cfg.get("tts", {})
+    tts_cfg = section("tts")
     if tts_cfg.get("kind", "piper") == "mock":
         tts: TTS = MockTTS()
     else:
         tts = PiperTTS(
             binary=tts_cfg.get("binary", "piper"),
-            voice_path=tts_cfg.get("voice_path", "/opt/piper/voices/en_US-amy-medium.onnx"),
+            voice_path=tts_cfg.get("voice_path", "/opt/piper/voices/en_US-ryan-medium.onnx"),
             voice_rate=int(tts_cfg.get("voice_rate", 22050)),
         )
 

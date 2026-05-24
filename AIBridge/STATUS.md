@@ -4,21 +4,23 @@
 
 - P25 wire-protocol parser/emitter for LDU1/LDU2/end records (`p25_protocol.py`)
 - UDP gateway daemon with IDLE/RX/PROCESSING/TX state machine and half-duplex
-  collision handling (`bridge.py`)
+  collision handling (`bridge.py`) — verified end-to-end on real RF
 - Pluggable STT/LLM/TTS pipeline with both real and mock backends (`pipeline.py`)
 - Real-mode integrations: whisper.cpp (STT), Claude API (LLM), Piper+sox (TTS)
 - Mock mode end-to-end so the gateway + state machine can be exercised without
   the codec or model deps installed
+- **IMBE decode** via mbelib + C++ wrapper (`imbe_native/`) — radio audio
+  reaches Whisper as real PCM. Set `AIBRIDGE_CODEC=mbelib` in the service
+  unit (default in `aibridge.service`).
 - Installer (`install.sh`), systemd unit, MMDVMHost config doc
 
 ## TODO before first real test on radio
 
-- [ ] **IMBE codec** — currently `MockCodec`. Need to bind mbelib via ctypes.
-      Decode: `mbe_processImbe4400Data` + `mbe_synthesizeSpeechf`.
-      Encode: there's no encoder in mbelib — need to use a separate IMBE
-      encoder (e.g., `imbe_vocoder` from the OP25 / GR-OP25 projects) for the
-      TX direction. Decode-only would let us prove RX → STT works; for TX we
-      need encode too.
+- [ ] **IMBE encode** — `MbelibCodec.encode` currently returns 11 zero bytes
+      (no-op), so the bot's TX still arrives at the radio as silence/hum.
+      mbelib has no encoder; need to wire OP25's `imbe_vocoder` (full C++
+      encoder + decoder) and the b0-b7 ↔ 88-bit packing per TIA-102.BABA.
+      Or swap in a DVSI AMBE-3000 USB dongle.
 - [ ] **MMDVMHost peer auto-detection edge case** — current code uses the
       source address of whatever sent the first packet. If MMDVMHost is
       configured with separate TX/RX ports, this will TX back to the wrong

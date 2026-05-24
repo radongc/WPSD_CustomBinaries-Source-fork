@@ -14,8 +14,10 @@ RestartSec=5
 StandardOutput=journal
 StandardError=journal
 
-# Run with mock codec initially; switch to mbelib once the binding is wired.
-Environment=AIBRIDGE_CODEC=mock
+# mbelib decoder for real audio in (radio → STT); encode side still no-op
+# until the encoder library is wired. Set to "mock" to bypass the native
+# wrapper entirely (Phase 1 plumbing test).
+Environment=AIBRIDGE_CODEC=mbelib
 Environment=AIBRIDGE_LOG=INFO
 
 # Optional: pass the API key via env if not in config.

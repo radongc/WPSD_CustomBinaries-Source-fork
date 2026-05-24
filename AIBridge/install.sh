@@ -19,21 +19,18 @@ RUN_GROUP="$(id -gn "$RUN_USER" 2>/dev/null || echo "$RUN_USER")"
 echo "Installing for user: $RUN_USER (group: $RUN_GROUP)"
 
 # ─── apt packages ──────────────────────────────────────────────────────────
-echo "[1/6] Installing apt packages"
+echo "[1/7] Installing apt packages"
 apt-get update -qq
 apt-get install -y --no-install-recommends \
     python3 python3-pip python3-yaml \
     sox build-essential cmake git
-# NOTE: mbelib is not in standard Debian/RPi repos. When we wire the real
-# IMBE codec, we'll add a "build mbelib from source" step here. Until then
-# the mock codec needs no native deps.
 
 # ─── python packages ───────────────────────────────────────────────────────
-echo "[2/6] Installing Python packages"
+echo "[2/7] Installing Python packages"
 pip3 install --break-system-packages -r "$REPO_DIR/requirements.txt"
 
 # ─── whisper.cpp ───────────────────────────────────────────────────────────
-echo "[3/6] Building whisper.cpp + downloading small.en model"
+echo "[3/7] Building whisper.cpp + downloading small.en model"
 if [ ! -d /opt/whisper.cpp ]; then
     git clone --depth 1 https://github.com/ggml-org/whisper.cpp.git /opt/whisper.cpp
 fi
@@ -71,8 +68,27 @@ PATCH
   fi
 )
 
+# ─── mbelib + IMBE codec wrapper ───────────────────────────────────────────
+echo "[4/7] Building mbelib + AIBridge IMBE codec wrapper"
+if [ ! -d /opt/mbelib ]; then
+    git clone --depth 1 https://github.com/szechyjs/mbelib.git /opt/mbelib
+fi
+if [ ! -f /usr/local/lib/libmbe.so ]; then
+    ( cd /opt/mbelib
+      mkdir -p build && cd build
+      cmake -DCMAKE_BUILD_TYPE=Release ..
+      make -j"$(nproc)"
+      make install
+    )
+    ldconfig
+fi
+( cd "$REPO_DIR/imbe_native"
+  make clean
+  make
+)
+
 # ─── piper ─────────────────────────────────────────────────────────────────
-echo "[4/6] Installing Piper TTS + en_US-amy-medium voice"
+echo "[5/7] Installing Piper TTS + en_US-amy-medium voice"
 if ! command -v piper >/dev/null 2>&1; then
     PIPER_VER=2023.11.14-2
     PIPER_TGZ="piper_linux_aarch64.tar.gz"
@@ -95,10 +111,12 @@ if [ ! -f /opt/piper/voices/en_US-amy-medium.onnx ]; then
 fi
 
 # ─── install the bridge itself ─────────────────────────────────────────────
-echo "[5/6] Installing AIBridge under $INSTALL_DIR"
+echo "[6/7] Installing AIBridge under $INSTALL_DIR"
 mkdir -p "$INSTALL_DIR"
 cp -f "$REPO_DIR"/*.py "$INSTALL_DIR/"
 chmod +x "$INSTALL_DIR/bridge.py"
+# Copy the freshly-built IMBE codec wrapper too.
+cp -f "$REPO_DIR/imbe_native/libaibridge_imbe.so" "$INSTALL_DIR/"
 
 mkdir -p "$CONFIG_DIR"
 if [ ! -f "$CONFIG_DIR/config.yaml" ]; then
@@ -111,7 +129,7 @@ chown "$RUN_USER:$RUN_GROUP" "$CONFIG_DIR/config.yaml"
 chmod 600 "$CONFIG_DIR/config.yaml"
 
 # ─── systemd unit ──────────────────────────────────────────────────────────
-echo "[6/6] Installing systemd unit"
+echo "[7/7] Installing systemd unit"
 sed -e "s|^User=.*|User=$RUN_USER|" \
     -e "s|^Group=.*|Group=$RUN_GROUP|" \
     "$REPO_DIR/aibridge.service" > /etc/systemd/system/aibridge.service

@@ -8,22 +8,18 @@ We need both directions:
   decode: 11 bytes IMBE  -> 160 samples PCM int16 @ 8 kHz (20 ms)
   encode: 160 samples PCM -> 11 bytes IMBE
 
-The underlying codec is patent-encumbered, so we use the open-source
-`mbelib` (a clean-room implementation) plus a small thin wrapper. mbelib
-ships as a C library; we expose it via ctypes.
+The underlying codec is patent-encumbered, so we use mbelib for decode
+(a clean-room implementation, also used by OP25/DSD). Encode is currently
+a no-op until we wire in an encoder library — radio still hears the same
+quiet hum as MockCodec on TX, but RX side is fully decoded.
 
-The choice between mbelib and `py-imbe-vocoder` is left as a runtime
-preference. mbelib is the more battle-tested choice and is what OP25 and
-DSD use; py-imbe-vocoder bindings exist but are less consistently
-maintained across platforms.
-
-For the prototype we ship a `MockCodec` that returns silence on decode
-and zero IMBE frames on encode. That lets the end-to-end protocol path
-be tested before pulling in the real codec dep. Wire the real codec by
-setting `AIBRIDGE_CODEC=mbelib` in the environment (or via config).
+Codec selection by env var:
+  AIBRIDGE_CODEC=mock     -> silent passthrough (Phase 1 plumbing test)
+  AIBRIDGE_CODEC=mbelib   -> real decode via mbelib + zero-byte encode
 """
 
 from __future__ import annotations
+import ctypes
 import logging
 import os
 from typing import Protocol
@@ -76,26 +72,81 @@ class MockCodec:
         return b"\x00" * IMBE_FRAME_BYTES
 
 
+# Default install path for the C++ wrapper built from imbe_native/.
+_DEFAULT_WRAPPER_PATH = "/opt/aibridge/libaibridge_imbe.so"
+
+
 class MbelibCodec:
     """
-    Wraps mbelib via ctypes. Stubbed until we wire the actual library.
+    Real IMBE codec via mbelib (decode) + the AIBridge C++ wrapper.
 
-    To finish this:
-      1) apt-get install libmbe-dev  (or build mbelib from source)
-      2) ctypes.CDLL("libmbe.so") and bind the relevant entry points
-         (mbe_processImbe4400Data + mbe_synthesizeSpeechf)
-      3) Maintain per-codec state for the synthesizer (it's stateful
-         frame-to-frame because of the energy/pitch smoother)
+    The wrapper (`libaibridge_imbe.so`, built from `imbe_native/`) exposes
+    four C functions:
+      aibridge_imbe_create()  -> opaque ctx pointer (mbelib parm state)
+      aibridge_imbe_destroy(ctx)
+      aibridge_imbe_decode(ctx, imbe_11b*, pcm_160*)
+      aibridge_imbe_encode(ctx, pcm_160*, imbe_11b*)   # currently no-op
 
-    Left as a TODO so the rest of the bridge can be built/tested first.
+    Per-stream state lives in the ctx — mbelib needs prev-frame
+    parameters across calls because the synthesizer interpolates pitch
+    and energy. One Codec instance == one decoding stream.
     """
 
-    def __init__(self) -> None:
-        raise NotImplementedError(
-            "MbelibCodec not yet implemented. Set AIBRIDGE_CODEC=mock "
-            "to test the protocol layer, or finish the mbelib binding "
-            "in imbe_codec.py."
-        )
+    def __init__(self, lib_path: str = _DEFAULT_WRAPPER_PATH) -> None:
+        self._lib = ctypes.CDLL(lib_path)
+
+        self._lib.aibridge_imbe_create.restype = ctypes.c_void_p
+        self._lib.aibridge_imbe_create.argtypes = []
+
+        self._lib.aibridge_imbe_destroy.restype = None
+        self._lib.aibridge_imbe_destroy.argtypes = [ctypes.c_void_p]
+
+        self._lib.aibridge_imbe_decode.restype = None
+        self._lib.aibridge_imbe_decode.argtypes = [
+            ctypes.c_void_p,
+            ctypes.POINTER(ctypes.c_uint8),
+            ctypes.POINTER(ctypes.c_int16),
+        ]
+        self._lib.aibridge_imbe_encode.restype = None
+        self._lib.aibridge_imbe_encode.argtypes = [
+            ctypes.c_void_p,
+            ctypes.POINTER(ctypes.c_int16),
+            ctypes.POINTER(ctypes.c_uint8),
+        ]
+
+        self._ctx = self._lib.aibridge_imbe_create()
+        if not self._ctx:
+            raise RuntimeError("aibridge_imbe_create returned NULL")
+
+        # Reusable scratch buffers (one frame each) to avoid allocs per call.
+        self._pcm_buf = (ctypes.c_int16 * IMBE_FRAME_SAMPLES)()
+        self._imbe_buf = (ctypes.c_uint8 * IMBE_FRAME_BYTES)()
+
+    def __del__(self) -> None:
+        # Best-effort: __del__ ordering during interpreter shutdown is fragile.
+        try:
+            if getattr(self, "_ctx", None) and getattr(self, "_lib", None):
+                self._lib.aibridge_imbe_destroy(self._ctx)
+                self._ctx = None
+        except Exception:
+            pass
+
+    def decode(self, imbe_11b: bytes) -> bytes:
+        if len(imbe_11b) != IMBE_FRAME_BYTES:
+            log.warning("MbelibCodec.decode: unexpected frame size %d", len(imbe_11b))
+            return b"\x00" * (IMBE_FRAME_SAMPLES * PCM_SAMPLE_WIDTH)
+        in_buf = (ctypes.c_uint8 * IMBE_FRAME_BYTES).from_buffer_copy(imbe_11b)
+        self._lib.aibridge_imbe_decode(self._ctx, in_buf, self._pcm_buf)
+        return bytes(self._pcm_buf)
+
+    def encode(self, pcm_320b: bytes) -> bytes:
+        expected = IMBE_FRAME_SAMPLES * PCM_SAMPLE_WIDTH
+        if len(pcm_320b) != expected:
+            log.warning("MbelibCodec.encode: unexpected PCM size %d", len(pcm_320b))
+            return b"\x00" * IMBE_FRAME_BYTES
+        in_buf = (ctypes.c_int16 * IMBE_FRAME_SAMPLES).from_buffer_copy(pcm_320b)
+        self._lib.aibridge_imbe_encode(self._ctx, in_buf, self._imbe_buf)
+        return bytes(self._imbe_buf)
 
 
 def get_codec() -> Codec:
@@ -105,6 +156,7 @@ def get_codec() -> Codec:
         log.info("Using MockCodec (silent passthrough)")
         return MockCodec()
     if choice == "mbelib":
+        log.info("Using MbelibCodec (real decode via mbelib, encode still mock)")
         return MbelibCodec()
     raise ValueError(f"Unknown AIBRIDGE_CODEC={choice!r}")
 

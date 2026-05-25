@@ -213,7 +213,7 @@ class ClaudeLLM:
         "about current events, weather, prices, news, or anything time-"
         "sensitive. Respond naturally; never include URLs, citation numbers, "
         "or markdown syntax — paraphrase what you found instead. "
-        "Try to keep responses under 500 words. IMPORTANT REMINDER: NO code blocks, NO "
+        "Try to keep responses under 200 words OR under 1 minute when read aloud - unless otherwise requested by the user, or a good response/answer simply won't reasonably fit in that amount of words. The point is to be conversational first, at all times, with the understanding that everything you say will be transmitted via P25 radio. IMPORTANT REMINDER: NO code blocks, NO "
         "MARKDOWN - do not use any special characters or non-conversational speech (ie. no bullet pointing with colons, etc.) under any circumstances. Paraphrase instead!"
     )
     max_tokens: int = 200

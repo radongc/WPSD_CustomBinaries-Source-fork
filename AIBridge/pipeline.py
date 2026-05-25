@@ -197,8 +197,8 @@ class ClaudeLLM:
     model: str = "claude-haiku-4-5-20251001"
     system_prompt: str = (
         "You are a helpful AI assistant accessible by amateur radio over "
-        "a P25 voice link. Keep responses short, plain, and easy to follow "
-        "when heard aloud — under 40 words. No code blocks, no markdown."
+        "a P25 voice link. Keep responses to the point, plain, and easy to follow "
+        "when heard aloud — under 200 words. No code blocks, no markdown."
     )
     max_tokens: int = 200
     idle_reset_sec: float = 600.0
@@ -323,28 +323,20 @@ class PiperTTS:
             [self.binary, "--model", self.voice_path, "--output-raw"],
             stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
         )
-        # Effects chain:
-        #   gain -6   : 6 dB headroom prevents IMBE clipping on Piper peaks.
-        #   rate -v   : high-quality 22050 → 8000 downsample.
-        #   silence …: trim leading + trailing digital silence (Piper
-        #     bookends each sentence with ~30-60 ms of true zero PCM).
-        #     If we leave it, our concatenated stream has ~100 ms of
-        #     dead-zero PCM at every sentence boundary, which the IMBE
-        #     encoder turns into ultra-low-energy frames that some P25
-        #     receivers treat as loss-of-signal and briefly squelch.
-        #     `reverse … reverse` is the standard sox idiom for
-        #     trim-both-ends, which forces sox to buffer one sentence
-        #     before output — fine, since the bridge prebuffers anyway.
+        # gain -6: 6 dB headroom prevents IMBE clipping on Piper peaks.
+        # rate -v: high-quality 22050 → 8000 downsample.
+        # (We previously also stripped Piper's leading/trailing silence,
+        #  on the theory that low-energy IMBE frames at sentence
+        #  boundaries were what triggered the carrier blips. Turned out
+        #  the real cause was TX pacing drift; with that fixed, Piper's
+        #  ~60-120 ms of natural inter-sentence silence is desirable —
+        #  trimming it made the speech feel rushed.)
         sox = subprocess.Popen(
             ["sox", "-t", "raw", "-r", str(self.voice_rate), "-e", "signed",
              "-b", "16", "-c", "1", "-",
              "-t", "raw", "-r", str(PCM_SAMPLE_RATE), "-e", "signed",
              "-b", "16", "-c", "1", "-",
-             "gain", "-6", "rate", "-v",
-             "silence", "1", "0.05", "0.5%",
-             "reverse",
-             "silence", "1", "0.05", "0.5%",
-             "reverse"],
+             "gain", "-6", "rate", "-v"],
             stdin=piper.stdout, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
         )
         if piper.stdout:

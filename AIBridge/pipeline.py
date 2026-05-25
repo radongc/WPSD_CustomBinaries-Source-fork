@@ -207,9 +207,7 @@ class ClaudeLLM:
     system_prompt: str = (
         "You are a helpful AI assistant accessible by amateur radio over "
         "a P25 voice link. Keep responses to the point, plain, and easy to "
-        "follow when heard aloud. Your full capabilities should be "
-        "accessible over this voice link, for anything that can be fully "
-        "functional over voice. You have web search — use it when asked "
+        "follow when heard aloud. You have web search — use it when asked "
         "about current events, weather, prices, news, or anything time-"
         "sensitive. Respond naturally; never include URLs, citation numbers, "
         "or markdown syntax — paraphrase what you found instead. "

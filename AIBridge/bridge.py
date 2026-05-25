@@ -332,6 +332,16 @@ class Bridge:
             log.info("TX stream start (prebuffered %d bytes / %.2fs)",
                      len(buf), len(buf) / 16000.0)
             t0 = time.monotonic()
+            # Absolute send schedule. We compute when each packet *should*
+            # leave (t0 + N * 20 ms) and sleep until that wall time, instead
+            # of sleeping 20 ms per packet. Per-packet sleeps over-run by
+            # 1-2 ms each on Linux, plus the LDU build between iterations
+            # adds another few ms; over 30+ LDUs that drift adds up to
+            # several hundred ms, the modem's TX FIFO drains, and the
+            # carrier blips while the modem waits for the next packet.
+            # Absolute scheduling self-corrects: if we fall behind, the
+            # next packet ships immediately.
+            packets_sent = 0
             toggle_ldu1 = True
             total_frames = 0
             silence_ldus = 0   # diagnostic — mid-stream underrun count
@@ -391,10 +401,15 @@ class Bridge:
                         log.info("TX aborted mid-stream")
                         return
                     self.sock.sendto(pkt, self.mmdvm_addr)
-                    # Pace at roughly real-time so MMDVMHost's modem
-                    # queue doesn't have to absorb the whole call in
-                    # one gulp.
-                    time.sleep(INTER_PACKET_DELAY_S)
+                    packets_sent += 1
+                    # Sleep until the next packet's absolute deadline,
+                    # not for a fixed duration. If we already missed it
+                    # (LDU build took too long, last sleep over-ran)
+                    # the next packet ships immediately.
+                    deadline = t0 + packets_sent * INTER_PACKET_DELAY_S
+                    slack = deadline - time.monotonic()
+                    if slack > 0:
+                        time.sleep(slack)
 
             self.sock.sendto(p25.build_end_record(), self.mmdvm_addr)
             elapsed = time.monotonic() - t0

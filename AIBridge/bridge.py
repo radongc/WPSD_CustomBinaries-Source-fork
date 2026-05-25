@@ -241,9 +241,16 @@ class Bridge:
     # the carrier briefly. ~1.5 sec of headroom is enough to absorb a
     # typical inter-sentence gap on a Pi.
     _PREBUFFER_TARGET_BYTES = 24000   # ~1.5 sec of 8 kHz / 16-bit PCM
-    # Max wall time we'll wait to fill the prebuffer before keying up
-    # anyway. Bounded so a slow first sentence doesn't hang TX forever.
-    _PREBUFFER_DEADLINE_S = 10.0
+    # How long we'll wait for the FIRST PCM byte from the pipeline.
+    # STT + a slow LLM round-trip can comfortably consume 15-20 sec on
+    # a Pi; this needs to cover that worst case or short replies get
+    # silently dropped. Only fires if the whole pipeline genuinely
+    # never produces anything.
+    _FIRST_BYTE_TIMEOUT_S = 60.0
+    # Once the producer is alive and yielding, how long we'll keep
+    # waiting to top the prebuffer up to TARGET. Short — past the
+    # first byte the producer is steady-state and bytes arrive fast.
+    _PREBUFFER_FILL_S = 3.0
 
     def _transmit_pcm_stream(self, chunks_iter) -> None:
         """
@@ -289,20 +296,21 @@ class Bridge:
 
         try:
             # ─── Prebuffer ──────────────────────────────────────────────
-            # Build up a cushion of audio before keying up. We stop early
-            # if (a) we hit the target, (b) the producer finishes, or
-            # (c) the deadline expires (so a slow first sentence still
-            # eventually starts TXing with whatever we have).
-            deadline = time.monotonic() + self._PREBUFFER_DEADLINE_S
-            while (len(buf) < self._PREBUFFER_TARGET_BYTES
-                   and not producer_done):
+            # Two phases. Phase 1 waits generously for the FIRST PCM byte
+            # (STT + a slow LLM round-trip can take many seconds). Once
+            # we have any audio at all we switch to Phase 2: a short
+            # deadline to top the buffer up to TARGET. This avoids the
+            # silent-drop failure mode where a slow LLM call eats a
+            # single combined deadline before any audio is produced.
+            first_byte_deadline = time.monotonic() + self._FIRST_BYTE_TIMEOUT_S
+            while not buf and not producer_done:
                 if self.tx_abort.is_set():
                     return
-                remaining = deadline - time.monotonic()
+                remaining = first_byte_deadline - time.monotonic()
                 if remaining <= 0:
-                    log.info("TX prebuffer deadline; starting with %d/%d bytes",
-                             len(buf), self._PREBUFFER_TARGET_BYTES)
-                    break
+                    log.warning("TX: no PCM after %.0fs; giving up",
+                                self._FIRST_BYTE_TIMEOUT_S)
+                    return
                 try:
                     item = pcm_q.get(timeout=min(remaining, 0.5))
                 except queue.Empty:
@@ -313,8 +321,29 @@ class Bridge:
                 buf.extend(item)
 
             if not buf:
-                log.info("TX stream: no PCM produced; nothing to send")
+                # Producer finished without ever producing anything.
+                log.info("TX stream: pipeline produced no PCM; nothing to send")
                 return
+
+            # Phase 2: fill toward TARGET on the shorter deadline.
+            fill_deadline = time.monotonic() + self._PREBUFFER_FILL_S
+            while (len(buf) < self._PREBUFFER_TARGET_BYTES
+                   and not producer_done):
+                if self.tx_abort.is_set():
+                    return
+                remaining = fill_deadline - time.monotonic()
+                if remaining <= 0:
+                    log.info("TX prebuffer fill deadline; starting with %d/%d bytes",
+                             len(buf), self._PREBUFFER_TARGET_BYTES)
+                    break
+                try:
+                    item = pcm_q.get(timeout=min(remaining, 0.5))
+                except queue.Empty:
+                    continue
+                if item is producer_done_sentinel:
+                    producer_done = True
+                    break
+                buf.extend(item)
 
             # We have audio — key up.
             with self.state_lock:

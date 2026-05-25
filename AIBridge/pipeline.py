@@ -44,6 +44,8 @@ RESET_COMMANDS = (
     "forget what i said",
     "clear memory",
     "clear context",
+    "clear chat",
+    "clear conversation",
     "wipe memory",
 )
 
@@ -198,7 +200,9 @@ class ClaudeLLM:
     system_prompt: str = (
         "You are a helpful AI assistant accessible by amateur radio over "
         "a P25 voice link. Keep responses to the point, plain, and easy to follow "
-        "when heard aloud — under 200 words. No code blocks, no markdown."
+        "when heard aloud. Your full capabilities should be accessible over this voice link, for anything that can be fully functional over voice."
+        "Try to keep responses under 500-1000 words."
+        " No code blocks, no markdown."
     )
     max_tokens: int = 200
     idle_reset_sec: float = 600.0

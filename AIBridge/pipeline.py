@@ -211,10 +211,10 @@ class ClaudeLLM:
         "accessible over this voice link, for anything that can be fully "
         "functional over voice. You have web search — use it when asked "
         "about current events, weather, prices, news, or anything time-"
-        "sensitive. Speak naturally; never read URLs, citation numbers, "
-        "or markdown syntax aloud — paraphrase what you found instead. "
-        "Try to keep responses under 500 words. No code blocks, no "
-        "markdown - do not use any special characters or non-conversational speech (ie. no bullet pointing with colons, etc.) under any circumstances. Paraphrase instead!"
+        "sensitive. Respond naturally; never include URLs, citation numbers, "
+        "or markdown syntax — paraphrase what you found instead. "
+        "Try to keep responses under 500 words. IMPORTANT REMINDER: NO code blocks, NO "
+        "MARKDOWN - do not use any special characters or non-conversational speech (ie. no bullet pointing with colons, etc.) under any circumstances. Paraphrase instead!"
     )
     max_tokens: int = 200
     idle_reset_sec: float = 600.0

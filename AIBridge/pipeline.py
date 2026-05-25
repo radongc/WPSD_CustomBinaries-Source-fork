@@ -194,25 +194,51 @@ class ClaudeLLM:
       - If the generator is closed early (consumer abandons it), the
         partial response is discarded and the user turn is rolled back —
         history stays alternating and consistent.
+
+    Tools:
+      - web_search (server-side): when enabled, Claude can search the web
+        itself. The SDK's text_stream filters out the tool-use machinery
+        and yields only response text, so we don't have to run a tool
+        loop locally. There's just a pause in the stream while the search
+        runs — covered by the bridge's first-byte timeout.
     """
     api_key: str
     model: str = "claude-haiku-4-5-20251001"
     system_prompt: str = (
         "You are a helpful AI assistant accessible by amateur radio over "
-        "a P25 voice link. Keep responses to the point, plain, and easy to follow "
-        "when heard aloud. Your full capabilities should be accessible over this voice link, for anything that can be fully functional over voice."
-        "Try to keep responses under 500-1000 words."
-        " No code blocks, no markdown."
+        "a P25 voice link. Keep responses to the point, plain, and easy to "
+        "follow when heard aloud. Your full capabilities should be "
+        "accessible over this voice link, for anything that can be fully "
+        "functional over voice. You have web search — use it when asked "
+        "about current events, weather, prices, news, or anything time-"
+        "sensitive. Speak naturally; never read URLs, citation numbers, "
+        "or markdown syntax aloud — paraphrase what you found instead. "
+        "Try to keep responses under 500-1000 words. No code blocks, no "
+        "markdown."
     )
     max_tokens: int = 200
     idle_reset_sec: float = 600.0
     max_turns: int = 20
+    # Server-side web search (Anthropic-hosted). Cheap to keep enabled —
+    # Claude only invokes the tool when it judges that current info is
+    # actually needed.
+    web_search: bool = True
+    web_search_max_uses: int = 3
 
     def __post_init__(self) -> None:
         from anthropic import Anthropic
         self._client = Anthropic(api_key=self.api_key)
         self._histories: dict[str, list[dict]] = {}
         self._last_seen: dict[str, float] = {}
+        # Materialise the tools list once. Empty list means we omit the
+        # `tools` kwarg from the request (no tool calls possible).
+        self._tools: list[dict] = []
+        if self.web_search:
+            self._tools.append({
+                "type": "web_search_20250305",
+                "name": "web_search",
+                "max_uses": self.web_search_max_uses,
+            })
 
     def respond(self, user_text: str, conversation_id: str = "default") -> str:
         """Blocking call — fully drains the stream and joins all sentences."""
@@ -240,13 +266,17 @@ class ClaudeLLM:
         sentence_buf = ""
         t0 = time.monotonic()
 
+        stream_kwargs = dict(
+            model=self.model,
+            max_tokens=self.max_tokens,
+            system=self.system_prompt,
+            messages=history,
+        )
+        if self._tools:
+            stream_kwargs["tools"] = self._tools
+
         try:
-            with self._client.messages.stream(
-                model=self.model,
-                max_tokens=self.max_tokens,
-                system=self.system_prompt,
-                messages=history,
-            ) as stream:
+            with self._client.messages.stream(**stream_kwargs) as stream:
                 for delta_text in stream.text_stream:
                     sentence_buf += delta_text
                     # Drain complete sentences out of the buffer.
@@ -473,6 +503,8 @@ def build_pipeline(cfg: dict) -> Pipeline:
             model=llm_cfg.get("model", "claude-haiku-4-5-20251001"),
             system_prompt=llm_cfg.get("system_prompt", ClaudeLLM.system_prompt),
             max_tokens=int(llm_cfg.get("max_tokens", 200)),
+            web_search=bool(llm_cfg.get("web_search", True)),
+            web_search_max_uses=int(llm_cfg.get("web_search_max_uses", 3)),
         )
 
     tts_cfg = section("tts")

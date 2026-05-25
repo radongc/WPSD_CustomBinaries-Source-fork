@@ -47,10 +47,21 @@ llm:
   model: claude-haiku-4-5-20251001
   max_tokens: 200
 
+  # Anthropic-hosted web search (server-side tool). Lets the model answer
+  # questions about current events, weather, prices, sports scores, etc.
+  # Billed per search at $0.01 each — cap with web_search_max_uses.
+  # Claude only invokes the tool when it judges a search is actually
+  # needed, so leaving this on is usually fine.
+  web_search: true
+  web_search_max_uses: 3
+
   system_prompt: |
     You are a helpful AI assistant accessible by amateur radio over a P25
     voice link. Keep responses short, plain, and easy to follow when heard
     aloud — under 40 words. No code blocks, no markdown, no lists.
+    You have web search — use it for current events, weather, prices, or
+    anything time-sensitive. Speak naturally; never read URLs or citation
+    numbers aloud, just paraphrase what you found.
 
 tts:
   # kind: "piper" or "mock"

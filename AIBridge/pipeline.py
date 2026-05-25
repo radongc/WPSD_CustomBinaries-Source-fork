@@ -213,8 +213,8 @@ class ClaudeLLM:
         "about current events, weather, prices, news, or anything time-"
         "sensitive. Speak naturally; never read URLs, citation numbers, "
         "or markdown syntax aloud — paraphrase what you found instead. "
-        "Try to keep responses under 500-1000 words. No code blocks, no "
-        "markdown."
+        "Try to keep responses under 500 words. No code blocks, no "
+        "markdown - do not use any special characters or non-conversational speech (ie. no bullet pointing with colons, etc.) under any circumstances. Paraphrase instead!"
     )
     max_tokens: int = 200
     idle_reset_sec: float = 600.0

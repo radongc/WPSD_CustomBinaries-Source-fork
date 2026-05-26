@@ -14,6 +14,25 @@ mmdvm:
   # host: "127.0.0.1"
   # port: 42010
 
+upstream:
+  # Optional transparent passthrough to a regular P25 gateway
+  # (P25Gateway, etc.) so non-bot talkgroups keep working normally.
+  #
+  # When configured, every packet from MMDVMHost is mirrored to this
+  # address, and replies from this endpoint are forwarded back to
+  # MMDVMHost. The bot only acts on calls whose dst_id matches the
+  # bot.dst_id below; everything else just passes through, exactly as
+  # if MMDVMHost were pointed straight at the gateway.
+  #
+  # Typical WPSD setup: move P25Gateway off of 42020 (or move the
+  # bridge off of 42020 and point MMDVMHost at the bridge's new port),
+  # and set upstream below to wherever P25Gateway now listens.
+  #
+  # Leave commented out to disable passthrough — the bridge will then
+  # intercept every TG as bot, which is the old behaviour.
+  # host: 127.0.0.1
+  # port: 42030
+
 bot:
   # P25 source ID the bot transmits as (24-bit unit ID). Pick something
   # not used by any of your real radios.

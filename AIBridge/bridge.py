@@ -100,6 +100,40 @@ class Bridge:
         self.bot_lcf = int(bot_cfg.get("lcf", 0))
         self.bot_mfid = int(bot_cfg.get("mfid", 0))
 
+        # Optional transparent passthrough to a regular P25 gateway
+        # (P25Gateway, etc.) for traffic that isn't on the bot's TG.
+        # Every packet MMDVMHost sends us is mirrored to upstream, and
+        # replies from upstream are forwarded to MMDVMHost — so non-bot
+        # talkgroups behave exactly as if MMDVMHost were pointed at the
+        # gateway directly. The bot only processes calls whose dst_id
+        # matches bot.dst_id; everything else passes through.
+        upstream_cfg = section("upstream")
+        self.upstream_addr: Optional[tuple[str, int]] = None
+        self.upstream_sock: Optional[socket.socket] = None
+        if upstream_cfg.get("host") and upstream_cfg.get("port"):
+            self.upstream_addr = (
+                upstream_cfg["host"], int(upstream_cfg["port"])
+            )
+            self.upstream_sock = socket.socket(
+                socket.AF_INET, socket.SOCK_DGRAM
+            )
+            self.upstream_sock.setsockopt(
+                socket.SOL_SOCKET, socket.SO_REUSEADDR, 1
+            )
+            # Ephemeral local port — upstream gateway replies to the
+            # source address it sees, which is whatever this socket
+            # ends up bound to.
+            self.upstream_sock.bind((self.listen_addr, 0))
+            log.info(
+                "Passthrough enabled: forwarding non-bot traffic to %s:%d",
+                *self.upstream_addr,
+            )
+        else:
+            log.info(
+                "Passthrough disabled (no upstream configured); "
+                "bridge intercepts every TG"
+            )
+
         # State.
         self.state = State.IDLE
         self.state_lock = threading.Lock()
@@ -152,6 +186,18 @@ class Bridge:
         """Dispatch one UDP packet from MMDVMHost into the state machine."""
         if not pkt:
             return
+
+        # Transparent passthrough: every MMDVMHost packet is mirrored to
+        # the upstream P25 gateway (if configured), regardless of TG. The
+        # bot still inspects them below and only claims calls whose
+        # dst_id matches bot.dst_id — non-bot calls just pass through
+        # untouched, exactly as if the bridge weren't here.
+        if self.upstream_sock and self.upstream_addr:
+            try:
+                self.upstream_sock.sendto(pkt, self.upstream_addr)
+            except OSError as e:
+                log.debug("upstream forward failed: %s", e)
+
         marker = pkt[0]
 
         with self.state_lock:
@@ -189,6 +235,15 @@ class Bridge:
         self.state = State.IDLE
         if buf is None or not buf.imbe_frames:
             log.info("RX ended with empty buffer; ignoring")
+            return
+        # Bot only acts on calls addressed to its configured TG. Anything
+        # else has already been forwarded to upstream by _handle_packet,
+        # so we just drop the buffered frames here.
+        if buf.meta.dst_id is not None and buf.meta.dst_id != self.bot_dst_id:
+            log.info("RX end: %d frames (%.2fs) on dst=%s — not bot's TG %d, "
+                     "passthrough only",
+                     len(buf.imbe_frames), buf.duration_s(),
+                     buf.meta.dst_id, self.bot_dst_id)
             return
         log.info("RX end: %d frames (%.2fs), src=%s dst=%s",
                  len(buf.imbe_frames), buf.duration_s(),
@@ -470,6 +525,29 @@ class Bridge:
         except Exception:
             log.debug("iterator close raised", exc_info=True)
 
+    # ─── upstream passthrough ─────────────────────────────────────────────
+
+    def upstream_loop(self) -> None:
+        """Forward packets coming back from the upstream P25 gateway out
+        to MMDVMHost. Stateless byte pipe — we never inspect or alter
+        the packet, we just shovel it in the other direction."""
+        if self.upstream_sock is None:
+            return
+        while True:
+            self.upstream_sock.settimeout(0.5)
+            try:
+                data, _addr = self.upstream_sock.recvfrom(2048)
+            except socket.timeout:
+                continue
+            if self.mmdvm_addr is None:
+                # No MMDVMHost peer learned yet; drop. Once any RX has
+                # arrived we'll know where to send.
+                continue
+            try:
+                self.sock.sendto(data, self.mmdvm_addr)
+            except OSError as e:
+                log.debug("upstream→mmdvm forward failed: %s", e)
+
     # ─── lifecycle ────────────────────────────────────────────────────────
 
     def run(self) -> None:
@@ -477,6 +555,11 @@ class Bridge:
         worker = threading.Thread(target=self.worker_loop, name="worker", daemon=True)
         rx.start()
         worker.start()
+        if self.upstream_sock is not None:
+            up = threading.Thread(
+                target=self.upstream_loop, name="upstream", daemon=True
+            )
+            up.start()
         log.info("AIBridge running. Ctrl-C to stop.")
         try:
             while True:

@@ -215,6 +215,7 @@ class ClaudeLLM:
         "MARKDOWN - do not use any special characters or non-conversational speech (ie. no bullet pointing with colons, etc.) under any circumstances. Paraphrase instead!"
 
         "ATTITUDE: You should be unbiased, objective, and blunt at all times. Do not sugar-coat or be overly-polite. Your attitude should depend entirely on the conversation's context - always remain helpful and informative, but don't be afraid to be blunt if the conversation calls for it."
+        "PLATFORM INFO: You operate as a modification/extension on the WPSD project. P25 is transliterated to text via STT, and then used to interact with Anthropic api. Responses are then used to generate TTS, which is converted into AMBE/P25 packets and transmitted over the hotspot."
     )
     max_tokens: int = 200
     idle_reset_sec: float = 600.0
@@ -224,6 +225,11 @@ class ClaudeLLM:
     # actually needed.
     web_search: bool = True
     web_search_max_uses: int = 3
+    # When True, append the speaker's P25 unit ID (= conversation_id,
+    # which is the radio's src_id) to the system prompt. Lets the bot
+    # reference the caller's unit ID if asked but doesn't make it
+    # announce the ID spontaneously.
+    include_unit_id: bool = False
 
     def __post_init__(self) -> None:
         from anthropic import Anthropic
@@ -239,6 +245,21 @@ class ClaudeLLM:
                 "name": "web_search",
                 "max_uses": self.web_search_max_uses,
             })
+
+    def _build_system(self, conversation_id: str) -> str:
+        """Per-request system prompt. Same content for every turn of a
+        given conversation, so it acts as stable context the model can
+        reference without it being part of the visible turn history."""
+        sys = self.system_prompt
+        if (self.include_unit_id
+                and conversation_id
+                and conversation_id not in ("anon", "default")):
+            sys += (
+                f"\n\nRadio context: the speaker's P25 unit ID is "
+                f"{conversation_id}. Reference it only if relevant or asked; "
+                f"do not announce it unprompted."
+            )
+        return sys
 
     def respond(self, user_text: str, conversation_id: str = "default") -> str:
         """Blocking call — fully drains the stream and joins all sentences."""
@@ -269,7 +290,7 @@ class ClaudeLLM:
         stream_kwargs = dict(
             model=self.model,
             max_tokens=self.max_tokens,
-            system=self.system_prompt,
+            system=self._build_system(conversation_id),
             messages=history,
         )
         if self._tools:
@@ -505,6 +526,7 @@ def build_pipeline(cfg: dict) -> Pipeline:
             max_tokens=int(llm_cfg.get("max_tokens", 200)),
             web_search=bool(llm_cfg.get("web_search", True)),
             web_search_max_uses=int(llm_cfg.get("web_search_max_uses", 3)),
+            include_unit_id=bool(llm_cfg.get("include_unit_id", False)),
         )
 
     tts_cfg = section("tts")

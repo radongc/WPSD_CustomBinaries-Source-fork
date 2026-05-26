@@ -55,6 +55,11 @@ llm:
   web_search: true
   web_search_max_uses: 3
 
+  # When true, append the speaker's P25 unit ID (src_id) to the system
+  # prompt for that conversation. The model can reference it if asked
+  # ("what's my unit ID?") but won't announce it spontaneously.
+  include_unit_id: false
+
   system_prompt: |
     You are a helpful AI assistant accessible by amateur radio over a P25
     voice link. Keep responses short, plain, and easy to follow when heard

@@ -60,6 +60,14 @@ llm:
   # ("what's my unit ID?") but won't announce it spontaneously.
   include_unit_id: false
 
+  # Client-side tool that lets the model query the radioid.net amateur
+  # radio database by unit ID. Pairs well with include_unit_id — the
+  # model can answer "what's my callsign?" by looking the caller's
+  # src_id up directly. No external account needed. max_tool_rounds is
+  # a safety cap on the per-response tool-use loop.
+  radioid_lookup: true
+  max_tool_rounds: 4
+
   system_prompt: |
     You are a helpful AI assistant accessible by amateur radio over a P25
     voice link. Keep responses short, plain, and easy to follow when heard

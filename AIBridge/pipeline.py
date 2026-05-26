@@ -15,15 +15,18 @@ PCM. Matches the IMBE codec on both sides.
 """
 
 from __future__ import annotations
+import json
 import logging
 import os
 import re
 import subprocess
 import tempfile
 import time
+import urllib.error
+import urllib.request
 import wave
 from dataclasses import dataclass
-from typing import Iterator, Optional, Protocol
+from typing import Any, Iterator, Optional, Protocol
 
 log = logging.getLogger("aibridge.pipeline")
 
@@ -67,6 +70,48 @@ def _handle_voice_command(text: str, llm, conversation_id: str) -> Optional[str]
 # or end of string. Used to chunk streaming LLM output into TTS-sized
 # pieces — TTS quality is generally better per-sentence than per-token.
 _SENTENCE_END = re.compile(r"[.!?\n](?:\s|$)")
+
+
+# ─── tool: radioid.net lookup ──────────────────────────────────────────────
+
+_RADIOID_URL = "https://radioid.net/api/dmr/user/?id={id}"
+
+
+def _lookup_radio_id(unit_id: int, timeout: float = 8.0) -> str:
+    """Query radioid.net for a numeric radio ID and return a human-
+    readable summary string. The radioid.net DMR database is shared with
+    P25/NXDN/Fusion for amateurs (same ID space), so this works for any
+    of those modes' src_ids.
+
+    Returns a short factual sentence on success, or an error/no-match
+    message on failure. Always returns a string — the Anthropic API
+    tool_result content field expects text."""
+    try:
+        with urllib.request.urlopen(
+            _RADIOID_URL.format(id=int(unit_id)), timeout=timeout
+        ) as resp:
+            data = json.loads(resp.read().decode("utf-8"))
+    except (urllib.error.URLError, json.JSONDecodeError,
+            TimeoutError, ValueError) as e:
+        return f"radioid.net lookup failed: {e}"
+
+    results = data.get("results") or []
+    if not results:
+        return f"No radioid.net record for unit ID {unit_id}."
+
+    user = results[0]
+    parts = [f"Unit ID {user.get('id', unit_id)}"]
+    if user.get("callsign"):
+        parts.append(f"callsign {user['callsign']}")
+    if user.get("name"):
+        parts.append(f"operator {user['name']}")
+    location = ", ".join(
+        x for x in (user.get("city"), user.get("state"), user.get("country"))
+        if x
+    )
+    if location:
+        parts.append(f"location {location}")
+    return "; ".join(parts) + "."
 
 
 # ─── interfaces ────────────────────────────────────────────────────────────
@@ -235,6 +280,14 @@ class ClaudeLLM:
     # reference the caller's unit ID if asked but doesn't make it
     # announce the ID spontaneously.
     include_unit_id: bool = False
+    # When True, expose a client-side tool that queries radioid.net for
+    # a numeric radio ID and returns callsign / operator info. Useful
+    # paired with include_unit_id — the bot can answer "what's my
+    # callsign" by looking the caller's src_id up directly.
+    radioid_lookup: bool = True
+    # Safety cap on the tool-use loop. Each iteration is one extra API
+    # round-trip plus one tool execution.
+    max_tool_rounds: int = 4
 
     def __post_init__(self) -> None:
         from anthropic import Anthropic
@@ -250,6 +303,46 @@ class ClaudeLLM:
                 "name": "web_search",
                 "max_uses": self.web_search_max_uses,
             })
+        if self.radioid_lookup:
+            self._tools.append({
+                "name": "lookup_radio_id",
+                "description": (
+                    "Look up a numeric P25 / DMR / NXDN / Fusion radio unit "
+                    "ID in the radioid.net amateur radio database. Returns "
+                    "the operator's callsign, name, and location if "
+                    "registered. Use this when the user asks about a unit "
+                    "ID's owner, callsign, or location — including their "
+                    "own (the speaker's unit ID is in the system prompt if "
+                    "available)."
+                ),
+                "input_schema": {
+                    "type": "object",
+                    "properties": {
+                        "unit_id": {
+                            "type": "integer",
+                            "description": (
+                                "The numeric radio ID to look up "
+                                "(1-16777215)."
+                            ),
+                        },
+                    },
+                    "required": ["unit_id"],
+                },
+            })
+
+    def _execute_tool(self, name: str, tool_input: dict) -> str:
+        """Dispatch a client-side tool call. Returns a text result that
+        will be fed back to the model as tool_result content."""
+        if name == "lookup_radio_id":
+            try:
+                unit_id = int(tool_input.get("unit_id"))
+            except (TypeError, ValueError):
+                return "Invalid unit_id; expected an integer."
+            result = _lookup_radio_id(unit_id)
+            log.info("Tool lookup_radio_id(%d) → %s", unit_id, result)
+            return result
+        log.warning("Tool %r requested but no handler", name)
+        return f"Tool {name!r} is not implemented."
 
     def _build_system(self, conversation_id: str) -> str:
         """Per-request system prompt. Same content for every turn of a
@@ -285,52 +378,87 @@ class ClaudeLLM:
             self._histories.pop(conversation_id, None)
 
         history = self._histories.setdefault(conversation_id, [])
-        history.append({"role": "user", "content": user_text})
-        user_msg_idx = len(history) - 1
+        # Build a working messages list. We only persist user_text + the
+        # final assistant text to long-term history; the intermediate
+        # tool_use / tool_result blocks live only in this list for the
+        # duration of the request.
+        messages: list[dict] = list(history)
+        messages.append({"role": "user", "content": user_text})
 
         full_text_parts: list[str] = []
         sentence_buf = ""
         t0 = time.monotonic()
 
-        stream_kwargs = dict(
-            model=self.model,
-            max_tokens=self.max_tokens,
-            system=self._build_system(conversation_id),
-            messages=history,
-        )
-        if self._tools:
-            stream_kwargs["tools"] = self._tools
+        def _drain_sentences() -> Iterator[str]:
+            """Pull complete sentences out of sentence_buf and yield them."""
+            nonlocal sentence_buf
+            while True:
+                match = _SENTENCE_END.search(sentence_buf)
+                if not match:
+                    return
+                end = match.end()
+                sentence = sentence_buf[:end].strip()
+                sentence_buf = sentence_buf[end:]
+                if sentence:
+                    full_text_parts.append(sentence)
+                    yield sentence
 
         try:
-            with self._client.messages.stream(**stream_kwargs) as stream:
-                for delta_text in stream.text_stream:
-                    sentence_buf += delta_text
-                    # Drain complete sentences out of the buffer.
-                    while True:
-                        match = _SENTENCE_END.search(sentence_buf)
-                        if not match:
-                            break
-                        end = match.end()
-                        sentence = sentence_buf[:end].strip()
-                        sentence_buf = sentence_buf[end:]
-                        if sentence:
-                            full_text_parts.append(sentence)
-                            yield sentence
+            for _round in range(self.max_tool_rounds + 1):
+                stream_kwargs: dict[str, Any] = dict(
+                    model=self.model,
+                    max_tokens=self.max_tokens,
+                    system=self._build_system(conversation_id),
+                    messages=messages,
+                )
+                if self._tools:
+                    stream_kwargs["tools"] = self._tools
 
-            # Stream done — flush trailing partial (last sentence may not
-            # have terminal punctuation).
-            remainder = sentence_buf.strip()
-            if remainder:
-                full_text_parts.append(remainder)
-                yield remainder
+                with self._client.messages.stream(**stream_kwargs) as stream:
+                    for delta_text in stream.text_stream:
+                        sentence_buf += delta_text
+                        yield from _drain_sentences()
+                    final_msg = stream.get_final_message()
+
+                if final_msg.stop_reason != "tool_use":
+                    # Normal end of turn — flush trailing partial sentence.
+                    remainder = sentence_buf.strip()
+                    if remainder:
+                        full_text_parts.append(remainder)
+                        yield remainder
+                        sentence_buf = ""
+                    break
+
+                # Tool round: execute every requested tool, append the
+                # assistant turn + results, loop for the model's follow-up.
+                messages.append({
+                    "role": "assistant",
+                    "content": final_msg.content,
+                })
+                tool_results: list[dict] = []
+                for block in final_msg.content:
+                    if getattr(block, "type", None) != "tool_use":
+                        continue
+                    tool_input = getattr(block, "input", {}) or {}
+                    result = self._execute_tool(block.name, tool_input)
+                    tool_results.append({
+                        "type": "tool_result",
+                        "tool_use_id": block.id,
+                        "content": result,
+                    })
+                messages.append({"role": "user", "content": tool_results})
+            else:
+                log.warning(
+                    "Claude[%s]: tool loop hit max_tool_rounds=%d; giving up",
+                    conversation_id, self.max_tool_rounds,
+                )
 
         finally:
-            # Runs on normal completion AND on GeneratorExit (consumer
-            # abandoned us mid-stream). Update history accordingly.
             elapsed = time.monotonic() - t0
             full_text = " ".join(full_text_parts).strip()
 
             if full_text:
+                history.append({"role": "user", "content": user_text})
                 history.append({"role": "assistant", "content": full_text})
                 if len(history) > self.max_turns:
                     del history[:2]
@@ -338,10 +466,6 @@ class ClaudeLLM:
                 log.info("Claude[%s] stream: %.2fs, %d chars, %d turns in context",
                          conversation_id, elapsed, len(full_text), len(history))
             else:
-                # Nothing emitted — roll back the user message so the
-                # alternation invariant holds for the next request.
-                if user_msg_idx < len(history) and history[user_msg_idx]["role"] == "user":
-                    del history[user_msg_idx:]
                 log.info("Claude[%s] stream: aborted with no output (%.2fs)",
                          conversation_id, elapsed)
 
@@ -532,6 +656,8 @@ def build_pipeline(cfg: dict) -> Pipeline:
             web_search=bool(llm_cfg.get("web_search", True)),
             web_search_max_uses=int(llm_cfg.get("web_search_max_uses", 3)),
             include_unit_id=bool(llm_cfg.get("include_unit_id", False)),
+            radioid_lookup=bool(llm_cfg.get("radioid_lookup", True)),
+            max_tool_rounds=int(llm_cfg.get("max_tool_rounds", 4)),
         )
 
     tts_cfg = section("tts")

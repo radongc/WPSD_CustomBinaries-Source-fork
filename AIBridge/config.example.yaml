@@ -85,6 +85,12 @@ llm:
   # src_id up directly. No external account needed. max_tool_rounds is
   # a safety cap on the per-response tool-use loop.
   radioid_lookup: true
+  # Client-side tool that queries api.hamdb.org for an amateur callsign
+  # (US FCC + DXCC data). Returns licensee name, license class /
+  # expiration, locality, and Maidenhead grid. House number and ZIP are
+  # filtered server-side here for privacy — over a public hotspot we
+  # voice street name + city + state only, never the full address.
+  callsign_lookup: true
   max_tool_rounds: 4
 
   system_prompt: |

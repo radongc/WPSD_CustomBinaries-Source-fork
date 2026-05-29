@@ -114,6 +114,91 @@ def _lookup_radio_id(unit_id: int, timeout: float = 8.0) -> str:
     return "; ".join(parts) + "."
 
 
+# ─── tool: HamDB callsign lookup ───────────────────────────────────────────
+
+_HAMDB_URL = "http://api.hamdb.org/v1/{callsign}/json/aibridge"
+
+
+def _street_name_only(addr1: str) -> str:
+    """Strip the house number off a US street address line, leaving the
+    street name. '93 JUNIPER AVE' → 'JUNIPER AVE'. PO Boxes return
+    empty (no street to extract)."""
+    if not addr1:
+        return ""
+    s = addr1.strip()
+    if re.match(r"^P\.?\s*O\.?\s+BOX\b", s, re.IGNORECASE):
+        return ""
+    # Drop a leading house number — allowing things like "93", "100A",
+    # "1234-1236" — plus the whitespace that follows.
+    return re.sub(
+        r"^\d+[A-Z]?(?:[\s\-]+\d+[A-Z]?)?\s+",
+        "",
+        s,
+        flags=re.IGNORECASE,
+    ).strip()
+
+
+def _lookup_callsign(callsign: str, timeout: float = 8.0) -> str:
+    """Query api.hamdb.org for an amateur callsign and return a short
+    human-readable summary. Public FCC + DXCC data only.
+
+    Privacy filter: the upstream returns the licensee's full street
+    address and ZIP. We drop the house number (so the bot can say
+    'lives on Juniper Ave in Westerville, OH' without ever voicing
+    the exact street number) and the ZIP. Coarse locality plus street
+    name only."""
+    cs = (callsign or "").strip().upper()
+    if not cs or not re.fullmatch(r"[A-Z0-9/]+", cs):
+        return f"Invalid callsign {callsign!r}; expected letters/digits only."
+    try:
+        with urllib.request.urlopen(
+            _HAMDB_URL.format(callsign=cs), timeout=timeout
+        ) as resp:
+            data = json.loads(resp.read().decode("utf-8"))
+    except (urllib.error.URLError, json.JSONDecodeError,
+            TimeoutError, ValueError) as e:
+        return f"HamDB lookup failed: {e}"
+
+    record = (data.get("hamdb") or {}).get("callsign") or {}
+    status = (data.get("hamdb") or {}).get("messages", {}).get("status", "")
+    if not record or status.upper() not in ("OK", ""):
+        return f"No HamDB record for callsign {cs}."
+
+    name = " ".join(
+        x for x in (record.get("fname"), record.get("mi"), record.get("name"))
+        if x and x.strip()
+    )
+    street = _street_name_only(record.get("addr1", ""))
+    locality = ", ".join(
+        x for x in (street, record.get("addr2"), record.get("state"),
+                    record.get("country"))
+        if x and x.strip()
+    )
+    license_class = {
+        "T": "Technician", "G": "General", "A": "Advanced",
+        "E": "Extra", "N": "Novice", "P": "Tech Plus",
+    }.get(record.get("class", ""), record.get("class") or "")
+    license_status = {
+        "A": "active", "E": "expired", "C": "cancelled",
+    }.get(record.get("status", ""), record.get("status") or "")
+
+    parts = [f"Callsign {record.get('call', cs)}"]
+    if name:
+        parts.append(f"licensee {name}")
+    if license_class:
+        suffix = f" ({license_status})" if license_status else ""
+        parts.append(f"{license_class} class{suffix}")
+    elif license_status:
+        parts.append(f"license status {license_status}")
+    if locality:
+        parts.append(f"location {locality}")
+    if record.get("grid"):
+        parts.append(f"grid {record['grid']}")
+    if record.get("expires"):
+        parts.append(f"license expires {record['expires']}")
+    return "; ".join(parts) + "."
+
+
 # ─── interfaces ────────────────────────────────────────────────────────────
 
 class STT(Protocol):
@@ -286,6 +371,11 @@ class ClaudeLLM:
     # paired with include_unit_id — the bot can answer "what's my
     # callsign" by looking the caller's src_id up directly.
     radioid_lookup: bool = True
+    # When True, expose a client-side tool that queries HamDB for an
+    # amateur callsign. Returns name, license class, locality, grid,
+    # and license expiration. House number and ZIP are filtered out —
+    # over a hotspot we voice street name + city, not full address.
+    callsign_lookup: bool = True
     # Safety cap on the tool-use loop. Each iteration is one extra API
     # round-trip plus one tool execution.
     max_tool_rounds: int = 4
@@ -330,6 +420,35 @@ class ClaudeLLM:
                     "required": ["unit_id"],
                 },
             })
+        if self.callsign_lookup:
+            self._tools.append({
+                "name": "lookup_callsign",
+                "description": (
+                    "Look up an amateur radio callsign in the public HamDB "
+                    "database (FCC for US calls, DXCC for others). Returns "
+                    "the licensee's name, license class and status, "
+                    "Maidenhead grid square, license expiration, and "
+                    "general locality (street name, city, state, country). "
+                    "The exact house number and ZIP are deliberately not "
+                    "returned. Use this when the user asks about a specific "
+                    "callsign — including chained from lookup_radio_id, "
+                    "e.g. unit ID -> callsign -> licensee details."
+                ),
+                "input_schema": {
+                    "type": "object",
+                    "properties": {
+                        "callsign": {
+                            "type": "string",
+                            "description": (
+                                "Amateur callsign, e.g. 'W1AW' or 'KE8UID'. "
+                                "Case-insensitive. Letters, digits, and '/' "
+                                "for portable/slash designators."
+                            ),
+                        },
+                    },
+                    "required": ["callsign"],
+                },
+            })
 
     def _execute_tool(self, name: str, tool_input: dict) -> str:
         """Dispatch a client-side tool call. Returns a text result that
@@ -341,6 +460,13 @@ class ClaudeLLM:
                 return "Invalid unit_id; expected an integer."
             result = _lookup_radio_id(unit_id)
             log.info("Tool lookup_radio_id(%d) → %s", unit_id, result)
+            return result
+        if name == "lookup_callsign":
+            callsign = tool_input.get("callsign") or ""
+            if not isinstance(callsign, str):
+                return "Invalid callsign; expected a string."
+            result = _lookup_callsign(callsign)
+            log.info("Tool lookup_callsign(%r) → %s", callsign, result)
             return result
         log.warning("Tool %r requested but no handler", name)
         return f"Tool {name!r} is not implemented."
@@ -658,6 +784,7 @@ def build_pipeline(cfg: dict) -> Pipeline:
             web_search_max_uses=int(llm_cfg.get("web_search_max_uses", 3)),
             include_unit_id=bool(llm_cfg.get("include_unit_id", False)),
             radioid_lookup=bool(llm_cfg.get("radioid_lookup", True)),
+            callsign_lookup=bool(llm_cfg.get("callsign_lookup", True)),
             max_tool_rounds=int(llm_cfg.get("max_tool_rounds", 4)),
         )
 

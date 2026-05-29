@@ -55,16 +55,25 @@ stt:
   threads: 4
 
 llm:
-  # kind: "claude" or "mock"
+  # kind: "claude" (Anthropic), "grok" (xAI), or "mock"
   kind: claude
 
-  # Either put the key here or set ANTHROPIC_API_KEY in the env. Env wins
-  # if both are set. Keep this file readable only by root if you put the
-  # key here (chmod 600 /etc/aibridge/config.yaml).
+  # API key for the chosen provider. The env var fallback depends on kind:
+  #   claude → ANTHROPIC_API_KEY
+  #   grok   → XAI_API_KEY
+  # Env wins if both are set. Keep this file readable only by root if you
+  # put the key here (chmod 600 /etc/aibridge/config.yaml).
   api_key: ""
 
+  # Model ID. Defaults per provider:
+  #   claude → claude-haiku-4-5-20251001
+  #   grok   → grok-4-fast (override if xAI's current names have moved)
   model: claude-haiku-4-5-20251001
   max_tokens: 200
+
+  # Grok-only: override the API base URL if needed (e.g. a proxy).
+  # Defaults to https://api.x.ai/v1, no need to set otherwise.
+  # base_url: https://api.x.ai/v1
 
   # Anthropic-hosted web search (server-side tool). Lets the model answer
   # questions about current events, weather, prices, sports scores, etc.

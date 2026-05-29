@@ -43,6 +43,7 @@ RESET_COMMANDS = (
     "new conversation",
     "new chat",
     "start over",
+    "start it over",
     "forget everything",
     "forget what i said",
     "clear memory",
@@ -351,7 +352,6 @@ class ClaudeLLM:
         "ATTITUDE: You should be unbiased, objective, and blunt at all times. Do not sugar-coat or be overly-polite. Your attitude should depend entirely on the conversation's context - always remain helpful and informative, but don't be afraid to be blunt if the conversation calls for it."
         "HONESTY (most important rule): Never invent facts, names, callsigns, numbers, dates, URLs, or anything else. If you are not confident in an answer, do not guess. Your default response when you are unsure is to use web search to find out. If web search is unavailable, fails, or doesn't return what you need, say so plainly — e.g. 'I don't know,' 'I couldn't find that,' or 'I'm not sure, and I couldn't verify it.' It is always better to admit you don't know than to fabricate. This rule applies equally to lookup_radio_id: if the radioid.net lookup returns no record or an error, say that — do not invent a callsign or operator name. Do not paper over uncertainty with confident-sounding language."
         "PLATFORM INFO: You operate as a modification/extension on the WPSD project. P25 is transliterated to text via STT, and then used to interact with Anthropic api. Responses are then used to generate TTS, which is converted into AMBE/P25 packets and transmitted over the hotspot."
-        "EXTRA TOOLS: RadioID.net allows searching for operator information (eg. callsign) from Unit IDs."
     )
     max_tokens: int = 200
     idle_reset_sec: float = 600.0
@@ -604,6 +604,277 @@ class ClaudeLLM:
 
 
 @dataclass
+class GrokLLM:
+    """
+    xAI Grok client. Talks to Grok's OpenAI-compatible endpoint via the
+    `openai` Python SDK, so we get streaming and tool calling with the
+    standard ChatCompletions shape.
+
+    Same conversation-memory model, same sentence-level streaming, and
+    same client-side tools as ClaudeLLM — just a different provider on
+    the wire. Web search is mapped to Grok's "Live Search"
+    (search_parameters), not a tool definition.
+    """
+    api_key: str
+    model: str = "grok-4-fast"
+    system_prompt: str = ClaudeLLM.system_prompt
+    max_tokens: int = 200
+    idle_reset_sec: float = 600.0
+    max_turns: int = 20
+    web_search: bool = True
+    include_unit_id: bool = False
+    radioid_lookup: bool = True
+    callsign_lookup: bool = True
+    max_tool_rounds: int = 4
+    base_url: str = "https://api.x.ai/v1"
+
+    def __post_init__(self) -> None:
+        from openai import OpenAI
+        self._client = OpenAI(api_key=self.api_key, base_url=self.base_url)
+        self._histories: dict[str, list[dict]] = {}
+        self._last_seen: dict[str, float] = {}
+        # OpenAI-style tool list.
+        self._tools: list[dict] = []
+        if self.radioid_lookup:
+            self._tools.append({
+                "type": "function",
+                "function": {
+                    "name": "lookup_radio_id",
+                    "description": (
+                        "Look up a numeric P25 / DMR / NXDN / Fusion radio "
+                        "unit ID in the radioid.net amateur radio database. "
+                        "Returns the operator's callsign, name, and "
+                        "location."
+                    ),
+                    "parameters": {
+                        "type": "object",
+                        "properties": {
+                            "unit_id": {
+                                "type": "integer",
+                                "description": (
+                                    "Numeric radio ID (1-16777215)."
+                                ),
+                            },
+                        },
+                        "required": ["unit_id"],
+                    },
+                },
+            })
+        if self.callsign_lookup:
+            self._tools.append({
+                "type": "function",
+                "function": {
+                    "name": "lookup_callsign",
+                    "description": (
+                        "Look up an amateur callsign in HamDB (FCC + DXCC). "
+                        "Returns licensee name, license class/status, "
+                        "Maidenhead grid, license expiration, and general "
+                        "locality. House number and ZIP are filtered out."
+                    ),
+                    "parameters": {
+                        "type": "object",
+                        "properties": {
+                            "callsign": {
+                                "type": "string",
+                                "description": (
+                                    "Callsign, e.g. 'W1AW'. Case-insensitive."
+                                ),
+                            },
+                        },
+                        "required": ["callsign"],
+                    },
+                },
+            })
+
+    def _execute_tool(self, name: str, tool_input: dict) -> str:
+        if name == "lookup_radio_id":
+            try:
+                unit_id = int(tool_input.get("unit_id"))
+            except (TypeError, ValueError):
+                return "Invalid unit_id; expected an integer."
+            result = _lookup_radio_id(unit_id)
+            log.info("Tool lookup_radio_id(%d) → %s", unit_id, result)
+            return result
+        if name == "lookup_callsign":
+            callsign = tool_input.get("callsign") or ""
+            if not isinstance(callsign, str):
+                return "Invalid callsign; expected a string."
+            result = _lookup_callsign(callsign)
+            log.info("Tool lookup_callsign(%r) → %s", callsign, result)
+            return result
+        log.warning("Tool %r requested but no handler", name)
+        return f"Tool {name!r} is not implemented."
+
+    def _build_system(self, conversation_id: str) -> str:
+        sys = self.system_prompt
+        if (self.include_unit_id
+                and conversation_id
+                and conversation_id not in ("anon", "default")):
+            sys += (
+                f"\n\nRadio context: the speaker's P25 unit ID is "
+                f"{conversation_id}. Reference it only if relevant or asked; "
+                f"do not announce it unprompted."
+            )
+        return sys
+
+    def respond(self, user_text: str, conversation_id: str = "default") -> str:
+        sentences = list(self.respond_stream(user_text, conversation_id))
+        return " ".join(sentences).strip()
+
+    def respond_stream(self, user_text: str,
+                       conversation_id: str = "default") -> Iterator[str]:
+        if not user_text.strip():
+            yield "I didn't catch that. Try again?"
+            return
+
+        now = time.monotonic()
+        prior = self._last_seen.get(conversation_id, 0.0)
+        if prior and (now - prior) > self.idle_reset_sec:
+            log.info("Grok[%s]: idle %.0fs, resetting context",
+                     conversation_id, now - prior)
+            self._histories.pop(conversation_id, None)
+
+        history = self._histories.setdefault(conversation_id, [])
+        # OpenAI puts the system prompt in the messages list. We build a
+        # fresh working list each request so the tool-loop's intermediate
+        # assistant + tool messages don't leak into long-term history.
+        messages: list[dict] = [
+            {"role": "system", "content": self._build_system(conversation_id)},
+        ]
+        messages.extend(history)
+        messages.append({"role": "user", "content": user_text})
+
+        full_text_parts: list[str] = []
+        sentence_buf = ""
+        t0 = time.monotonic()
+
+        def _drain_sentences() -> Iterator[str]:
+            nonlocal sentence_buf
+            while True:
+                match = _SENTENCE_END.search(sentence_buf)
+                if not match:
+                    return
+                end = match.end()
+                sentence = sentence_buf[:end].strip()
+                sentence_buf = sentence_buf[end:]
+                if sentence:
+                    full_text_parts.append(sentence)
+                    yield sentence
+
+        try:
+            for _round in range(self.max_tool_rounds + 1):
+                create_kwargs: dict[str, Any] = dict(
+                    model=self.model,
+                    messages=messages,
+                    max_tokens=self.max_tokens,
+                    stream=True,
+                )
+                if self._tools:
+                    create_kwargs["tools"] = self._tools
+                if self.web_search:
+                    # Grok server-side Live Search. "auto" lets the
+                    # model decide whether to invoke it.
+                    create_kwargs["extra_body"] = {
+                        "search_parameters": {"mode": "auto"},
+                    }
+
+                content_buf = ""
+                # index -> {"id": str, "name": str, "args_buf": str}
+                tc_accum: dict[int, dict[str, str]] = {}
+                finish_reason: Optional[str] = None
+
+                stream = self._client.chat.completions.create(**create_kwargs)
+                for chunk in stream:
+                    if not chunk.choices:
+                        continue
+                    choice = chunk.choices[0]
+                    delta = choice.delta
+                    if delta and delta.content:
+                        content_buf += delta.content
+                        sentence_buf += delta.content
+                        yield from _drain_sentences()
+                    if delta and getattr(delta, "tool_calls", None):
+                        for tc_delta in delta.tool_calls:
+                            idx = getattr(tc_delta, "index", 0) or 0
+                            slot = tc_accum.setdefault(
+                                idx, {"id": "", "name": "", "args_buf": ""}
+                            )
+                            if getattr(tc_delta, "id", None):
+                                slot["id"] = tc_delta.id
+                            fn = getattr(tc_delta, "function", None)
+                            if fn is not None:
+                                if getattr(fn, "name", None):
+                                    slot["name"] = fn.name
+                                if getattr(fn, "arguments", None):
+                                    slot["args_buf"] += fn.arguments
+                    if choice.finish_reason:
+                        finish_reason = choice.finish_reason
+
+                if finish_reason != "tool_calls":
+                    remainder = sentence_buf.strip()
+                    if remainder:
+                        full_text_parts.append(remainder)
+                        yield remainder
+                        sentence_buf = ""
+                    break
+
+                # Tool round: append the assistant's tool_calls message
+                # and one tool result per call, then loop.
+                tool_calls_msg = []
+                for slot in tc_accum.values():
+                    tool_calls_msg.append({
+                        "id": slot["id"],
+                        "type": "function",
+                        "function": {
+                            "name": slot["name"],
+                            "arguments": slot["args_buf"] or "{}",
+                        },
+                    })
+                messages.append({
+                    "role": "assistant",
+                    "content": content_buf or None,
+                    "tool_calls": tool_calls_msg,
+                })
+                for slot in tc_accum.values():
+                    try:
+                        args = json.loads(slot["args_buf"] or "{}")
+                    except json.JSONDecodeError:
+                        args = {}
+                    result = self._execute_tool(slot["name"], args)
+                    messages.append({
+                        "role": "tool",
+                        "tool_call_id": slot["id"],
+                        "content": result,
+                    })
+            else:
+                log.warning(
+                    "Grok[%s]: tool loop hit max_tool_rounds=%d; giving up",
+                    conversation_id, self.max_tool_rounds,
+                )
+
+        finally:
+            elapsed = time.monotonic() - t0
+            full_text = " ".join(full_text_parts).strip()
+            if full_text:
+                history.append({"role": "user", "content": user_text})
+                history.append({"role": "assistant", "content": full_text})
+                if len(history) > self.max_turns:
+                    del history[:2]
+                self._last_seen[conversation_id] = now
+                log.info("Grok[%s] stream: %.2fs, %d chars, %d turns in context",
+                         conversation_id, elapsed, len(full_text), len(history))
+            else:
+                log.info("Grok[%s] stream: aborted with no output (%.2fs)",
+                         conversation_id, elapsed)
+
+    def reset_conversation(self, conversation_id: str = "default") -> None:
+        if conversation_id in self._histories:
+            log.info("Grok[%s]: manual reset, %d turns dropped",
+                     conversation_id, len(self._histories[conversation_id]))
+            del self._histories[conversation_id]
+
+
+@dataclass
 class PiperTTS:
     """
     Shells out to Piper (PCM on stdout via --output-raw) piped through sox
@@ -772,9 +1043,23 @@ def build_pipeline(cfg: dict) -> Pipeline:
         )
 
     llm_cfg = section("llm")
-    if llm_cfg.get("kind", "claude") == "mock":
+    kind = llm_cfg.get("kind", "claude")
+    if kind == "mock":
         llm: LLM = MockLLM(system_prompt=llm_cfg.get("system_prompt", ""))
-    else:
+    elif kind == "grok":
+        llm = GrokLLM(
+            api_key=llm_cfg.get("api_key") or os.environ.get("XAI_API_KEY", ""),
+            model=llm_cfg.get("model", "grok-4-fast"),
+            system_prompt=llm_cfg.get("system_prompt", GrokLLM.system_prompt),
+            max_tokens=int(llm_cfg.get("max_tokens", 200)),
+            web_search=bool(llm_cfg.get("web_search", True)),
+            include_unit_id=bool(llm_cfg.get("include_unit_id", False)),
+            radioid_lookup=bool(llm_cfg.get("radioid_lookup", True)),
+            callsign_lookup=bool(llm_cfg.get("callsign_lookup", True)),
+            max_tool_rounds=int(llm_cfg.get("max_tool_rounds", 4)),
+            base_url=llm_cfg.get("base_url", "https://api.x.ai/v1"),
+        )
+    else:  # "claude" or anything else falls back to Claude
         llm = ClaudeLLM(
             api_key=llm_cfg.get("api_key") or os.environ.get("ANTHROPIC_API_KEY", ""),
             model=llm_cfg.get("model", "claude-haiku-4-5-20251001"),

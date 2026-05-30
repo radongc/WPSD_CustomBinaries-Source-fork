@@ -606,17 +606,36 @@ class ClaudeLLM:
 @dataclass
 class GrokLLM:
     """
-    xAI Grok client. Talks to Grok's OpenAI-compatible endpoint via the
-    `openai` Python SDK, so we get streaming and tool calling with the
-    standard ChatCompletions shape.
+    xAI Grok client. Uses the Responses API at /v1/responses (NOT
+    chat.completions), because xAI hard-deprecated Live Search on
+    chat.completions in Jan 2026 and its replacement — server-side
+    web_search via the Agent Tools API — is only exposed on
+    /v1/responses. Talking to that endpoint via the `openai` SDK is
+    `client.responses.create(...)`.
 
-    Same conversation-memory model, same sentence-level streaming, and
-    same client-side tools as ClaudeLLM — just a different provider on
-    the wire. Web search is mapped to Grok's "Live Search"
-    (search_parameters), not a tool definition.
+    Differences from ClaudeLLM beyond the underlying API:
+      - Web search is the simplest server-side tool: just
+        `{"type": "web_search"}`. The model decides when to invoke it,
+        and we don't see it in the function-call stream.
+      - Client-side function tools use the Responses API's *flat* shape
+        (name/description/parameters at top level of the tool entry),
+        not the nested `function: {...}` shape that chat.completions
+        uses.
+      - Tool follow-up uses `previous_response_id` plus a fresh `input`
+        list of `function_call_output` items, instead of replaying the
+        whole message list.
+      - System prompt goes in the `instructions=` kwarg, not in `input`.
+
+    Memory model is the same: long-term history only ever stores the
+    original user_text and final assistant text; intermediate
+    function_call / function_call_output items stay scoped to the
+    request.
     """
     api_key: str
-    model: str = "grok-4-fast"
+    # grok-4-fast and the other "-fast" tier IDs were retired
+    # 2026-05-15 and now silently redirect to grok-4.3. Default to that
+    # explicitly; override via config.yaml if xAI's naming moves again.
+    model: str = "grok-4.3"
     system_prompt: str = ClaudeLLM.system_prompt
     max_tokens: int = 200
     idle_reset_sec: float = 600.0
@@ -633,71 +652,58 @@ class GrokLLM:
         self._client = OpenAI(api_key=self.api_key, base_url=self.base_url)
         self._histories: dict[str, list[dict]] = {}
         self._last_seen: dict[str, float] = {}
-        # OpenAI-style tool list. xAI accepts a server-side web_search
-        # tool in the same list — this replaced the old search_parameters
-        # Live Search API, which now returns 410 Gone.
+        # Responses-API tool list. Note: function tools are flat here
+        # (name/description/parameters at the top level), unlike the
+        # chat.completions shape that nests them under `function: {...}`.
         self._tools: list[dict] = []
         if self.web_search:
-            # xAI's OpenAI-compat endpoint takes "live_search" as a
-            # server-side tool. Requires an inline `sources` list — same
-            # source shape the old search_parameters API used. Grok
-            # decides server-side whether to invoke it; it doesn't come
-            # back as a tool_calls delta.
-            self._tools.append({
-                "type": "live_search",
-                "sources": [
-                    {"type": "web"},
-                    {"type": "news"},
-                ],
-            })
+            # Server-side tool — Grok handles it internally; we never
+            # see a corresponding function_call item to dispatch.
+            self._tools.append({"type": "web_search"})
         if self.radioid_lookup:
             self._tools.append({
                 "type": "function",
-                "function": {
-                    "name": "lookup_radio_id",
-                    "description": (
-                        "Look up a numeric P25 / DMR / NXDN / Fusion radio "
-                        "unit ID in the radioid.net amateur radio database. "
-                        "Returns the operator's callsign, name, and "
-                        "location."
-                    ),
-                    "parameters": {
-                        "type": "object",
-                        "properties": {
-                            "unit_id": {
-                                "type": "integer",
-                                "description": (
-                                    "Numeric radio ID (1-16777215)."
-                                ),
-                            },
+                "name": "lookup_radio_id",
+                "description": (
+                    "Look up a numeric P25 / DMR / NXDN / Fusion radio "
+                    "unit ID in the radioid.net amateur radio database. "
+                    "Returns the operator's callsign, name, and "
+                    "location."
+                ),
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "unit_id": {
+                            "type": "integer",
+                            "description": (
+                                "Numeric radio ID (1-16777215)."
+                            ),
                         },
-                        "required": ["unit_id"],
                     },
+                    "required": ["unit_id"],
                 },
             })
         if self.callsign_lookup:
             self._tools.append({
                 "type": "function",
-                "function": {
-                    "name": "lookup_callsign",
-                    "description": (
-                        "Look up an amateur callsign in HamDB (FCC + DXCC). "
-                        "Returns licensee name, license class/status, "
-                        "Maidenhead grid, license expiration, and general "
-                        "locality. House number and ZIP are filtered out."
-                    ),
-                    "parameters": {
-                        "type": "object",
-                        "properties": {
-                            "callsign": {
-                                "type": "string",
-                                "description": (
-                                    "Callsign, e.g. 'W1AW'. Case-insensitive."
-                                ),
-                            },
+                "name": "lookup_callsign",
+                "description": (
+                    "Look up an amateur callsign in HamDB (FCC + DXCC). "
+                    "Returns licensee name, license class/status, "
+                    "Maidenhead grid, license expiration, and general "
+                    "locality. House number and ZIP are filtered out."
+                ),
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "callsign": {
+                            "type": "string",
+                            "description": (
+                                "Callsign, e.g. 'W1AW'. Case-insensitive."
+                            ),
                         },
-                        "required": ["callsign"],
                     },
+                    "required": ["callsign"],
                 },
             })
 
@@ -750,18 +756,19 @@ class GrokLLM:
             self._histories.pop(conversation_id, None)
 
         history = self._histories.setdefault(conversation_id, [])
-        # OpenAI puts the system prompt in the messages list. We build a
-        # fresh working list each request so the tool-loop's intermediate
-        # assistant + tool messages don't leak into long-term history.
-        messages: list[dict] = [
-            {"role": "system", "content": self._build_system(conversation_id)},
+        # Initial input is the prior user/assistant history followed by
+        # the new user turn. After a tool round, we'll replace this with
+        # a list of function_call_output items and chain via
+        # previous_response_id.
+        input_items: list = list(history) + [
+            {"role": "user", "content": user_text}
         ]
-        messages.extend(history)
-        messages.append({"role": "user", "content": user_text})
+        instructions = self._build_system(conversation_id)
 
         full_text_parts: list[str] = []
         sentence_buf = ""
         t0 = time.monotonic()
+        previous_response_id: Optional[str] = None
 
         def _drain_sentences() -> Iterator[str]:
             nonlocal sentence_buf
@@ -780,46 +787,48 @@ class GrokLLM:
             for _round in range(self.max_tool_rounds + 1):
                 create_kwargs: dict[str, Any] = dict(
                     model=self.model,
-                    messages=messages,
-                    max_tokens=self.max_tokens,
+                    instructions=instructions,
+                    input=input_items,
+                    max_output_tokens=self.max_tokens,
                     stream=True,
                 )
                 if self._tools:
                     create_kwargs["tools"] = self._tools
+                if previous_response_id is not None:
+                    create_kwargs["previous_response_id"] = previous_response_id
 
-                content_buf = ""
-                # index -> {"id": str, "name": str, "args_buf": str}
-                tc_accum: dict[int, dict[str, str]] = {}
-                finish_reason: Optional[str] = None
+                final_response = None
+                stream = self._client.responses.create(**create_kwargs)
+                for event in stream:
+                    etype = getattr(event, "type", "")
+                    if etype == "response.output_text.delta":
+                        delta = getattr(event, "delta", "") or ""
+                        if delta:
+                            sentence_buf += delta
+                            yield from _drain_sentences()
+                    elif etype == "response.completed":
+                        final_response = getattr(event, "response", None)
+                    elif etype == "response.error":
+                        err = getattr(event, "error", None)
+                        log.warning("Grok[%s] stream error event: %r",
+                                    conversation_id, err)
 
-                stream = self._client.chat.completions.create(**create_kwargs)
-                for chunk in stream:
-                    if not chunk.choices:
-                        continue
-                    choice = chunk.choices[0]
-                    delta = choice.delta
-                    if delta and delta.content:
-                        content_buf += delta.content
-                        sentence_buf += delta.content
-                        yield from _drain_sentences()
-                    if delta and getattr(delta, "tool_calls", None):
-                        for tc_delta in delta.tool_calls:
-                            idx = getattr(tc_delta, "index", 0) or 0
-                            slot = tc_accum.setdefault(
-                                idx, {"id": "", "name": "", "args_buf": ""}
-                            )
-                            if getattr(tc_delta, "id", None):
-                                slot["id"] = tc_delta.id
-                            fn = getattr(tc_delta, "function", None)
-                            if fn is not None:
-                                if getattr(fn, "name", None):
-                                    slot["name"] = fn.name
-                                if getattr(fn, "arguments", None):
-                                    slot["args_buf"] += fn.arguments
-                    if choice.finish_reason:
-                        finish_reason = choice.finish_reason
+                if final_response is None:
+                    log.warning(
+                        "Grok[%s]: stream ended without response.completed",
+                        conversation_id,
+                    )
+                    break
 
-                if finish_reason != "tool_calls":
+                previous_response_id = getattr(final_response, "id", None)
+
+                # Find any client-side function_call items in the output.
+                function_calls = []
+                for item in getattr(final_response, "output", []) or []:
+                    if getattr(item, "type", "") == "function_call":
+                        function_calls.append(item)
+
+                if not function_calls:
                     remainder = sentence_buf.strip()
                     if remainder:
                         full_text_parts.append(remainder)
@@ -827,33 +836,21 @@ class GrokLLM:
                         sentence_buf = ""
                     break
 
-                # Tool round: append the assistant's tool_calls message
-                # and one tool result per call, then loop.
-                tool_calls_msg = []
-                for slot in tc_accum.values():
-                    tool_calls_msg.append({
-                        "id": slot["id"],
-                        "type": "function",
-                        "function": {
-                            "name": slot["name"],
-                            "arguments": slot["args_buf"] or "{}",
-                        },
-                    })
-                messages.append({
-                    "role": "assistant",
-                    "content": content_buf or None,
-                    "tool_calls": tool_calls_msg,
-                })
-                for slot in tc_accum.values():
+                # Execute each tool call and prepare function_call_output
+                # items for the follow-up round.
+                input_items = []
+                for fc in function_calls:
+                    args_str = getattr(fc, "arguments", "") or "{}"
                     try:
-                        args = json.loads(slot["args_buf"] or "{}")
+                        args = json.loads(args_str)
                     except json.JSONDecodeError:
                         args = {}
-                    result = self._execute_tool(slot["name"], args)
-                    messages.append({
-                        "role": "tool",
-                        "tool_call_id": slot["id"],
-                        "content": result,
+                    name = getattr(fc, "name", "") or ""
+                    result = self._execute_tool(name, args)
+                    input_items.append({
+                        "type": "function_call_output",
+                        "call_id": getattr(fc, "call_id", "") or "",
+                        "output": result,
                     })
             else:
                 log.warning(

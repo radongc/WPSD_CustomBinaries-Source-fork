@@ -638,7 +638,11 @@ class GrokLLM:
         # Live Search API, which now returns 410 Gone.
         self._tools: list[dict] = []
         if self.web_search:
-            self._tools.append({"type": "web_search"})
+            # xAI's OpenAI-compat endpoint accepts {"type": "live_search"}
+            # as a tool entry (the xai_sdk uses "web_search" — different
+            # surface, same feature). Grok decides server-side whether
+            # to invoke it; doesn't come back as a tool_calls delta.
+            self._tools.append({"type": "live_search"})
         if self.radioid_lookup:
             self._tools.append({
                 "type": "function",

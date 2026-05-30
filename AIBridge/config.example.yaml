@@ -113,8 +113,10 @@ llm:
     numbers aloud, just paraphrase what you found.
 
 tts:
-  # kind: "piper" or "mock"
+  # kind: "piper" (local, free), "openai" (cloud, paid), or "mock"
   kind: piper
+
+  # ── Piper options (used when kind: piper) ────────────────────────────
   binary: piper
   # ryan-medium: deeper male voice, medium quality. Same voice character
   # as ryan-high but renders ~2-3x faster on Pi-class hardware
@@ -125,3 +127,16 @@ tts:
   #   en_GB-jenny_dioco-medium (British, pleasant)
   voice_path: /opt/piper/voices/en_US-ryan-medium.onnx
   voice_rate: 22050  # native rate of the Piper voice; resampled to 8 kHz
+
+  # ── OpenAI TTS options (used when kind: openai) ──────────────────────
+  # API key. Set here or via env (OPENAI_API_KEY); env wins.
+  # api_key: ""
+  # Model: tts-1 (fast, $15/1M chars), tts-1-hd (higher quality, $30/1M),
+  # or gpt-4o-mini-tts (newer, same price as tts-1, voice-steering).
+  # model: tts-1
+  # Voice. For tts-1 / tts-1-hd: alloy, echo, fable, onyx, nova, shimmer.
+  # For gpt-4o-mini-tts also: ash, ballad, coral, sage. onyx is a deep
+  # male voice that projects well over compressed P25 audio.
+  # voice: onyx
+  # Override the API base URL for proxies / Azure / etc.
+  # base_url: https://api.openai.com/v1

@@ -21,6 +21,7 @@ import os
 import re
 import subprocess
 import tempfile
+import threading
 import time
 import urllib.error
 import urllib.request
@@ -976,6 +977,131 @@ class PiperTTS:
                         pass
 
 
+@dataclass
+class OpenAITTS:
+    """
+    OpenAI text-to-speech client. Hits the streaming PCM endpoint and
+    pipes the output through sox for resample + headroom — same shape
+    as PiperTTS so the bridge consumes it identically.
+
+    Default voice/model:
+      tts-1 + onyx — deepest / most "project-able" voice for a P25
+      voice link. tts-1 is fast and cheap (~$15/1M chars). For higher
+      quality try tts-1-hd ($30/1M) or gpt-4o-mini-tts (same price as
+      tts-1, supports voice-steering instructions and adds newer
+      voices like ash, ballad, coral, sage).
+
+    Source rate is 24 kHz (OpenAI's PCM output format); sox downsamples
+    to the bridge's 8 kHz. The OpenAI stream feeds sox's stdin from a
+    producer thread while we read sox's stdout chunk-by-chunk here, so
+    the bridge sees PCM as soon as the first sox-resampled bytes are
+    ready.
+    """
+    api_key: str
+    model: str = "tts-1"
+    voice: str = "onyx"
+    base_url: str = "https://api.openai.com/v1"
+    # OpenAI's PCM output sample rate.
+    _SOURCE_RATE: int = 24000
+    # Bytes per sox.stdout.read() call. Same sizing rationale as PiperTTS.
+    _CHUNK_BYTES: int = 8192
+
+    def __post_init__(self) -> None:
+        from openai import OpenAI
+        self._client = OpenAI(api_key=self.api_key, base_url=self.base_url)
+
+    def synthesize(self, text: str) -> bytes:
+        """Blocking — drains the stream into a single bytes buffer."""
+        return b"".join(self.synthesize_stream(text))
+
+    def synthesize_stream(self, text: str) -> Iterator[bytes]:
+        """Yields PCM chunks as OpenAI produces them and sox resamples
+        them. The OpenAI streaming response feeds sox's stdin on a
+        producer thread; sox's stdout drives the chunks we yield."""
+        t0 = time.monotonic()
+        # gain -6 mirrors PiperTTS: 6 dB headroom prevents IMBE clipping
+        # on TTS peaks. rate -v: high-quality 24000 → 8000 downsample.
+        sox = subprocess.Popen(
+            ["sox", "-t", "raw", "-r", str(self._SOURCE_RATE), "-e", "signed",
+             "-b", "16", "-c", "1", "-",
+             "-t", "raw", "-r", str(PCM_SAMPLE_RATE), "-e", "signed",
+             "-b", "16", "-c", "1", "-",
+             "gain", "-6", "rate", "-v"],
+            stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+        )
+
+        feeder_error: list[Optional[BaseException]] = [None]
+
+        def feed_sox() -> None:
+            """Stream OpenAI's PCM bytes into sox.stdin."""
+            try:
+                with self._client.audio.speech.with_streaming_response.create(
+                    model=self.model,
+                    voice=self.voice,
+                    input=text,
+                    response_format="pcm",
+                ) as response:
+                    assert sox.stdin is not None
+                    for chunk in response.iter_bytes():
+                        if not chunk:
+                            continue
+                        try:
+                            sox.stdin.write(chunk)
+                        except (BrokenPipeError, ValueError):
+                            # sox went away (consumer abandoned us, or
+                            # sox crashed). Stop pumping bytes.
+                            return
+            except Exception as e:  # noqa: BLE001
+                feeder_error[0] = e
+            finally:
+                try:
+                    if sox.stdin is not None:
+                        sox.stdin.close()
+                except Exception:
+                    pass
+
+        feeder = threading.Thread(
+            target=feed_sox, name="openai-tts-feed", daemon=True
+        )
+        feeder.start()
+
+        total_bytes = 0
+        try:
+            assert sox.stdout is not None
+            while True:
+                chunk = sox.stdout.read(self._CHUNK_BYTES)
+                if not chunk:
+                    break
+                total_bytes += len(chunk)
+                yield chunk
+
+            feeder.join(timeout=10)
+            try:
+                sox.wait(timeout=10)
+            except subprocess.TimeoutExpired:
+                log.warning("sox didn't exit cleanly after OpenAI TTS stream end")
+
+            if feeder_error[0] is not None:
+                log.warning("OpenAI TTS feeder error: %s", feeder_error[0])
+            if sox.returncode and sox.returncode != 0 and sox.stderr is not None:
+                err = sox.stderr.read().decode("utf-8", errors="replace")[:200]
+                log.warning("sox returned %d: %s", sox.returncode, err)
+
+            elapsed = time.monotonic() - t0
+            log.info("OpenAI TTS+sox stream: %.2fs, %d bytes PCM (%.1fs audio)",
+                     elapsed, total_bytes,
+                     total_bytes / (PCM_SAMPLE_RATE * 2))
+        finally:
+            # On GeneratorExit / exception, reap sox and let the feeder
+            # thread notice the broken pipe and exit on its own.
+            if sox.poll() is None:
+                sox.kill()
+                try:
+                    sox.communicate(timeout=5)
+                except (subprocess.TimeoutExpired, ValueError):
+                    pass
+
+
 # ─── pipeline orchestrator ─────────────────────────────────────────────────
 
 @dataclass
@@ -1085,9 +1211,17 @@ def build_pipeline(cfg: dict) -> Pipeline:
         )
 
     tts_cfg = section("tts")
-    if tts_cfg.get("kind", "piper") == "mock":
+    tts_kind = tts_cfg.get("kind", "piper")
+    if tts_kind == "mock":
         tts: TTS = MockTTS()
-    else:
+    elif tts_kind == "openai":
+        tts = OpenAITTS(
+            api_key=tts_cfg.get("api_key") or os.environ.get("OPENAI_API_KEY", ""),
+            model=tts_cfg.get("model", "tts-1"),
+            voice=tts_cfg.get("voice", "onyx"),
+            base_url=tts_cfg.get("base_url", "https://api.openai.com/v1"),
+        )
+    else:  # "piper" or anything else falls back to Piper
         tts = PiperTTS(
             binary=tts_cfg.get("binary", "piper"),
             voice_path=tts_cfg.get("voice_path", "/opt/piper/voices/en_US-ryan-medium.onnx"),

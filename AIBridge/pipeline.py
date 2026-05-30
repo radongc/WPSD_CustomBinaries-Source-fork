@@ -787,7 +787,6 @@ class GrokLLM:
             for _round in range(self.max_tool_rounds + 1):
                 create_kwargs: dict[str, Any] = dict(
                     model=self.model,
-                    instructions=instructions,
                     input=input_items,
                     max_output_tokens=self.max_tokens,
                     stream=True,
@@ -795,7 +794,13 @@ class GrokLLM:
                 if self._tools:
                     create_kwargs["tools"] = self._tools
                 if previous_response_id is not None:
+                    # xAI's Responses API rejects `instructions` + a
+                    # `previous_response_id` together — instructions are
+                    # already carried by the chained response, so on
+                    # follow-up rounds we omit them.
                     create_kwargs["previous_response_id"] = previous_response_id
+                else:
+                    create_kwargs["instructions"] = instructions
 
                 final_response = None
                 stream = self._client.responses.create(**create_kwargs)

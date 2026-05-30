@@ -633,8 +633,12 @@ class GrokLLM:
         self._client = OpenAI(api_key=self.api_key, base_url=self.base_url)
         self._histories: dict[str, list[dict]] = {}
         self._last_seen: dict[str, float] = {}
-        # OpenAI-style tool list.
+        # OpenAI-style tool list. xAI accepts a server-side web_search
+        # tool in the same list — this replaced the old search_parameters
+        # Live Search API, which now returns 410 Gone.
         self._tools: list[dict] = []
+        if self.web_search:
+            self._tools.append({"type": "web_search"})
         if self.radioid_lookup:
             self._tools.append({
                 "type": "function",
@@ -771,12 +775,6 @@ class GrokLLM:
                 )
                 if self._tools:
                     create_kwargs["tools"] = self._tools
-                if self.web_search:
-                    # Grok server-side Live Search. "auto" lets the
-                    # model decide whether to invoke it.
-                    create_kwargs["extra_body"] = {
-                        "search_parameters": {"mode": "auto"},
-                    }
 
                 content_buf = ""
                 # index -> {"id": str, "name": str, "args_buf": str}

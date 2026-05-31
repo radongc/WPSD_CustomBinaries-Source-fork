@@ -1044,8 +1044,21 @@ class OpenAITTS:
     ready.
     """
     api_key: str
-    model: str = "tts-1"
-    voice: str = "onyx"
+    # Defaults to gpt-4o-mini-tts so the `instructions` voice-steering
+    # field below is honored. tts-1 / tts-1-hd silently ignore it. Same
+    # price as tts-1 ($15/1M chars).
+    model: str = "gpt-4o-mini-tts"
+    voice: str = "ash"
+    # Voice-steering prompt — only meaningful on gpt-4o-mini-tts.
+    # Default to a clean, conversational two-way-radio delivery: quick,
+    # clear, no announcer affect. Override via config to taste.
+    instructions: str = (
+        "Speak like a regular person talking over a two-way radio — "
+        "or a police dispatcher. Clear and crisp, slightly quick, "
+        "direct. Natural conversational rhythm; no announcer voice, "
+        "no extra warmth, no dramatic pauses. Just deliver the "
+        "information cleanly."
+    )
     base_url: str = "https://api.openai.com/v1"
     # OpenAI's PCM output sample rate.
     _SOURCE_RATE: int = 24000
@@ -1080,12 +1093,19 @@ class OpenAITTS:
 
         def feed_sox() -> None:
             """Stream OpenAI's PCM bytes into sox.stdin."""
+            create_kwargs: dict[str, Any] = dict(
+                model=self.model,
+                voice=self.voice,
+                input=text,
+                response_format="pcm",
+            )
+            if self.instructions:
+                # Only meaningful on gpt-4o-mini-tts; older tts-1 / hd
+                # silently ignore the field.
+                create_kwargs["instructions"] = self.instructions
             try:
                 with self._client.audio.speech.with_streaming_response.create(
-                    model=self.model,
-                    voice=self.voice,
-                    input=text,
-                    response_format="pcm",
+                    **create_kwargs
                 ) as response:
                     assert sox.stdin is not None
                     for chunk in response.iter_bytes():
@@ -1263,8 +1283,9 @@ def build_pipeline(cfg: dict) -> Pipeline:
     elif tts_kind == "openai":
         tts = OpenAITTS(
             api_key=tts_cfg.get("api_key") or os.environ.get("OPENAI_API_KEY", ""),
-            model=tts_cfg.get("model", "tts-1"),
-            voice=tts_cfg.get("voice", "onyx"),
+            model=tts_cfg.get("model", "gpt-4o-mini-tts"),
+            voice=tts_cfg.get("voice", "ash"),
+            instructions=tts_cfg.get("instructions", OpenAITTS.instructions),
             base_url=tts_cfg.get("base_url", "https://api.openai.com/v1"),
         )
     else:  # "piper" or anything else falls back to Piper

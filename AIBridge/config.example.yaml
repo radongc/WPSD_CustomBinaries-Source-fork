@@ -131,12 +131,24 @@ tts:
   # ── OpenAI TTS options (used when kind: openai) ──────────────────────
   # API key. Set here or via env (OPENAI_API_KEY); env wins.
   # api_key: ""
-  # Model: tts-1 (fast, $15/1M chars), tts-1-hd (higher quality, $30/1M),
-  # or gpt-4o-mini-tts (newer, same price as tts-1, voice-steering).
-  # model: tts-1
+  # Model: gpt-4o-mini-tts (default, voice-steering, $15/1M chars),
+  # tts-1 (older, no voice-steering, $15/1M), or tts-1-hd ($30/1M).
+  # `instructions` below only works on gpt-4o-mini-tts.
+  # model: gpt-4o-mini-tts
   # Voice. For tts-1 / tts-1-hd: alloy, echo, fable, onyx, nova, shimmer.
-  # For gpt-4o-mini-tts also: ash, ballad, coral, sage. onyx is a deep
-  # male voice that projects well over compressed P25 audio.
-  # voice: onyx
+  # For gpt-4o-mini-tts also: ash, ballad, coral, sage, verse.
+  # Deep male voices (ash, onyx, echo, ballad, sage) project best over
+  # compressed P25 audio.
+  # voice: ash
+  # Voice-steering prompt (gpt-4o-mini-tts only). Plain English
+  # description of how the voice should sound. The default is a
+  # quick, clear two-way-radio / dispatcher delivery; override to
+  # taste ("Speak with a slight Southern drawl", "Sound enthusiastic
+  # and energetic", etc).
+  # instructions: |
+  #   Speak like a regular person talking over a two-way radio — or a
+  #   police dispatcher. Clear and crisp, slightly quick, direct.
+  #   Natural conversational rhythm; no announcer voice, no extra
+  #   warmth, no dramatic pauses. Just deliver the information cleanly.
   # Override the API base URL for proxies / Azure / etc.
   # base_url: https://api.openai.com/v1

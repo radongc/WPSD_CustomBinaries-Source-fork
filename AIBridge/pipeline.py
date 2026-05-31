@@ -1060,6 +1060,14 @@ class OpenAITTS:
         "information cleanly."
     )
     base_url: str = "https://api.openai.com/v1"
+    # Silence padding prepended to every utterance, in milliseconds.
+    # Piper has ~50-100 ms of natural leading silence which hides the
+    # modem's PTT / carrier-acquisition lag. OpenAI gpt-4o-mini-tts has
+    # essentially zero leading silence, so the first phoneme of a
+    # short word ("No.") can fall inside that PTT window and get
+    # clipped on-air. 150 ms is enough headroom on most hotspot
+    # modems; bump it if the first syllable still gets eaten.
+    preamble_ms: int = 150
     # OpenAI's PCM output sample rate.
     _SOURCE_RATE: int = 24000
     # Bytes per sox.stdout.read() call. Same sizing rationale as PiperTTS.
@@ -1093,6 +1101,18 @@ class OpenAITTS:
 
         def feed_sox() -> None:
             """Stream OpenAI's PCM bytes into sox.stdin."""
+            assert sox.stdin is not None
+            # Preamble silence — pads the start of every utterance so the
+            # modem PTT lag / radio carrier-acquisition window eats
+            # silence instead of the first phoneme of the actual word.
+            if self.preamble_ms > 0:
+                preamble_bytes = (self._SOURCE_RATE * 2
+                                  * self.preamble_ms // 1000)
+                try:
+                    sox.stdin.write(b"\x00" * preamble_bytes)
+                except (BrokenPipeError, ValueError):
+                    return
+
             create_kwargs: dict[str, Any] = dict(
                 model=self.model,
                 voice=self.voice,
@@ -1107,7 +1127,6 @@ class OpenAITTS:
                 with self._client.audio.speech.with_streaming_response.create(
                     **create_kwargs
                 ) as response:
-                    assert sox.stdin is not None
                     for chunk in response.iter_bytes():
                         if not chunk:
                             continue
@@ -1286,6 +1305,7 @@ def build_pipeline(cfg: dict) -> Pipeline:
             model=tts_cfg.get("model", "gpt-4o-mini-tts"),
             voice=tts_cfg.get("voice", "ash"),
             instructions=tts_cfg.get("instructions", OpenAITTS.instructions),
+            preamble_ms=int(tts_cfg.get("preamble_ms", 150)),
             base_url=tts_cfg.get("base_url", "https://api.openai.com/v1"),
         )
     else:  # "piper" or anything else falls back to Piper

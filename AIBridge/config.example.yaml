@@ -150,5 +150,12 @@ tts:
   #   police dispatcher. Clear and crisp, slightly quick, direct.
   #   Natural conversational rhythm; no announcer voice, no extra
   #   warmth, no dramatic pauses. Just deliver the information cleanly.
+  # Milliseconds of silence padded onto the start of every utterance.
+  # Hides the modem's PTT lag / radio carrier-acquisition window so
+  # the first phoneme of a short word ("No.") doesn't get clipped
+  # on-air. Piper has natural leading silence and doesn't need this;
+  # OpenAI's gpt-4o-mini-tts starts speaking immediately so the pad
+  # matters. Bump higher if the first syllable still gets eaten.
+  # preamble_ms: 150
   # Override the API base URL for proxies / Azure / etc.
   # base_url: https://api.openai.com/v1

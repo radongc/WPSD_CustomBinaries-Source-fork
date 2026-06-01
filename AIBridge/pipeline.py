@@ -78,11 +78,63 @@ _TTS_VOICE_TO_MODEL = {
 }
 
 
-# Voice-command regexes for runtime LLM / TTS-voice switching.
+# Phonetic aliases — Whisper STT routinely transcribes these names
+# slightly off ("Onyx" → "Onix"/"ONX"/"onicks", "Grok" → "Grock"/"Rock",
+# "Ash" → "Asch"/"Ax", etc.). Each canonical name maps to the set of
+# variants we'll accept; the alias table is consulted whenever a
+# command captures a word that doesn't match the canonical set.
+_VOICE_ALIASES: dict[str, set[str]] = {
+    "alloy":   {"alloy", "aloy", "ally", "alley"},
+    "echo":    {"echo", "eco", "ekko", "echoe"},
+    "fable":   {"fable", "fabel", "fabled", "fabble"},
+    "onyx":    {"onyx", "onix", "onx", "onicks", "onics",
+                "onyks", "anyx", "honex", "honecks"},
+    "nova":    {"nova", "noba", "nava", "novah"},
+    "shimmer": {"shimmer", "shimer", "simmer", "shemmer", "schimmer"},
+    "ash":     {"ash", "asch", "ax", "aash", "ashe", "asha"},
+    "ballad":  {"ballad", "balad", "ballet", "ballard", "balled"},
+    "coral":   {"coral", "choral", "carol", "corral", "corel"},
+    "sage":    {"sage", "stage", "sayge", "saige", "page", "sache"},
+    "verse":   {"verse", "vers", "verce", "versse"},
+}
+
+_LLM_ALIASES: dict[str, set[str]] = {
+    "claude":  {"claude", "clawed", "claud", "clod", "cloud", "claudia"},
+    "grok":    {"grok", "grock", "grog", "brock", "grot",
+                "rock", "crock", "groke", "groc"},
+}
+
+
+def _normalize_voice(spoken: str) -> Optional[str]:
+    """Map a spoken / STT-transcribed word to a canonical TTS voice
+    name, accounting for Whisper mishearings. Returns None if nothing
+    plausibly matches."""
+    s = (spoken or "").lower().strip()
+    if s in _TTS_VOICE_TO_MODEL:
+        return s
+    for canonical, aliases in _VOICE_ALIASES.items():
+        if s in aliases:
+            return canonical
+    return None
+
+
+def _normalize_llm(spoken: str) -> Optional[str]:
+    """Same idea as _normalize_voice but for LLM provider names."""
+    s = (spoken or "").lower().strip()
+    if s in LLM_PROVIDERS:
+        return s
+    for canonical, aliases in _LLM_ALIASES.items():
+        if s in aliases:
+            return canonical
+    return None
+
+
+# Voice-command regexes. They capture the trailing word as-is; the
+# normalizers above turn STT mishearings into canonical names.
 _LLM_SWITCH_RE = re.compile(
     r"\b(?:switch|change|use|set)\s+(?:the\s+)?"
     r"(?:llm|ai|model|provider|assistant)\s+(?:to\s+)?"
-    r"(claude|grok)\b",
+    r"([a-z]+)\b",
     re.IGNORECASE,
 )
 _VOICE_SWITCH_RE = re.compile(
@@ -91,7 +143,7 @@ _VOICE_SWITCH_RE = re.compile(
     re.IGNORECASE,
 )
 # Bare "switch to X" — disambiguates by whether X is a known LLM or
-# TTS voice name.
+# TTS voice name (after normalization).
 _BARE_SWITCH_RE = re.compile(
     r"\bswitch\s+to\s+([a-z0-9_-]+)\b",
     re.IGNORECASE,
@@ -114,21 +166,27 @@ def _handle_voice_command(text: str, pipeline, conversation_id: str) -> Optional
     # 2) Explicit LLM switch ("switch llm to grok").
     m = _LLM_SWITCH_RE.search(lowered)
     if m:
-        return pipeline.switch_llm(m.group(1).lower())
+        name = _normalize_llm(m.group(1))
+        if name:
+            return pipeline.switch_llm(name)
 
     # 3) Explicit voice switch ("switch voice to onyx").
     m = _VOICE_SWITCH_RE.search(lowered)
     if m:
-        return pipeline.switch_voice(m.group(1).lower())
+        voice = _normalize_voice(m.group(1))
+        if voice:
+            return pipeline.switch_voice(voice)
 
-    # 4) Bare "switch to X" — match against the two name spaces.
+    # 4) Bare "switch to X" — try both name spaces after normalization.
     m = _BARE_SWITCH_RE.search(lowered)
     if m:
-        target = m.group(1).lower()
-        if target in LLM_PROVIDERS:
-            return pipeline.switch_llm(target)
-        if target in _TTS_VOICE_TO_MODEL:
-            return pipeline.switch_voice(target)
+        target = m.group(1)
+        llm_name = _normalize_llm(target)
+        if llm_name:
+            return pipeline.switch_llm(llm_name)
+        voice = _normalize_voice(target)
+        if voice:
+            return pipeline.switch_voice(voice)
 
     return None
 

@@ -55,16 +55,81 @@ RESET_COMMANDS = (
 )
 
 
-def _handle_voice_command(text: str, llm, conversation_id: str) -> Optional[str]:
+# LLM providers selectable at runtime via voice command.
+LLM_PROVIDERS = ("claude", "grok")
+
+# OpenAI TTS voices keyed to the model they belong to. A voice command
+# like "switch voice to ash" picks the right model automatically; the
+# user doesn't have to know which voice lives on which model.
+_TTS_VOICE_TO_MODEL = {
+    # tts-1 / tts-1-hd voices
+    "alloy": "tts-1",
+    "echo": "tts-1",
+    "fable": "tts-1",
+    "onyx": "tts-1",
+    "nova": "tts-1",
+    "shimmer": "tts-1",
+    # gpt-4o-mini-tts voices
+    "ash": "gpt-4o-mini-tts",
+    "ballad": "gpt-4o-mini-tts",
+    "coral": "gpt-4o-mini-tts",
+    "sage": "gpt-4o-mini-tts",
+    "verse": "gpt-4o-mini-tts",
+}
+
+
+# Voice-command regexes for runtime LLM / TTS-voice switching.
+_LLM_SWITCH_RE = re.compile(
+    r"\b(?:switch|change|use|set)\s+(?:the\s+)?"
+    r"(?:llm|ai|model|provider|assistant)\s+(?:to\s+)?"
+    r"(claude|grok)\b",
+    re.IGNORECASE,
+)
+_VOICE_SWITCH_RE = re.compile(
+    r"\b(?:switch|change|set|use)\s+(?:the\s+)?"
+    r"voice(?:\s+model)?\s+(?:to\s+)?([a-z]+)\b",
+    re.IGNORECASE,
+)
+# Bare "switch to X" — disambiguates by whether X is a known LLM or
+# TTS voice name.
+_BARE_SWITCH_RE = re.compile(
+    r"\bswitch\s+to\s+([a-z0-9_-]+)\b",
+    re.IGNORECASE,
+)
+
+
+def _handle_voice_command(text: str, pipeline, conversation_id: str) -> Optional[str]:
     """If `text` matches a built-in voice command, perform it and return
     a canned reply string. Returns None if no command matched (caller
     should pass through to the LLM)."""
     lowered = text.lower().strip().rstrip(".!?")
+
+    # 1) Conversation reset.
     for phrase in RESET_COMMANDS:
         if phrase in lowered:
-            llm.reset_conversation(conversation_id)
+            pipeline.llm.reset_conversation(conversation_id)
             log.info("Voice command matched: %r", phrase)
             return "Conversation reset. What's on your mind?"
+
+    # 2) Explicit LLM switch ("switch llm to grok").
+    m = _LLM_SWITCH_RE.search(lowered)
+    if m:
+        return pipeline.switch_llm(m.group(1).lower())
+
+    # 3) Explicit voice switch ("switch voice to onyx").
+    m = _VOICE_SWITCH_RE.search(lowered)
+    if m:
+        return pipeline.switch_voice(m.group(1).lower())
+
+    # 4) Bare "switch to X" — match against the two name spaces.
+    m = _BARE_SWITCH_RE.search(lowered)
+    if m:
+        target = m.group(1).lower()
+        if target in LLM_PROVIDERS:
+            return pipeline.switch_llm(target)
+        if target in _TTS_VOICE_TO_MODEL:
+            return pipeline.switch_voice(target)
+
     return None
 
 
@@ -1194,6 +1259,51 @@ class Pipeline:
     stt: STT
     llm: LLM
     tts: TTS
+    # Original config dict. Carried so runtime voice commands can
+    # rebuild the LLM / TTS with the same surrounding options
+    # (api_key, system_prompt, instructions, etc.) but a different
+    # kind/voice. Optional so existing callers that don't pass cfg
+    # still work — they just lose the switch capability.
+    cfg: Optional[dict] = None
+
+    def switch_llm(self, kind: str) -> str:
+        """Voice-command handler: swap the active LLM to the named
+        provider, reusing the surrounding config (system prompt,
+        flags). Returns a canned reply string for TTS."""
+        kind = (kind or "").lower()
+        if kind not in LLM_PROVIDERS:
+            return f"I don't know an LLM named {kind}."
+        if self.cfg is None:
+            return "LLM switching isn't available — bridge wasn't built with a config."
+        try:
+            self.llm = _build_llm(self.cfg, kind_override=kind)
+        except Exception:
+            log.exception("LLM switch to %s failed", kind)
+            return f"Couldn't switch to {kind}; see the bridge log."
+        log.info("Pipeline LLM switched to %s", kind)
+        return f"Switched to {kind}."
+
+    def switch_voice(self, voice: str) -> str:
+        """Voice-command handler: swap the OpenAI TTS voice (and the
+        matching model). Returns a canned reply for TTS."""
+        voice = (voice or "").lower()
+        model = _TTS_VOICE_TO_MODEL.get(voice)
+        if not model:
+            return f"I don't recognize the voice {voice}."
+        if self.cfg is None:
+            return "Voice switching isn't available — bridge wasn't built with a config."
+        try:
+            self.tts = _build_tts(
+                self.cfg,
+                kind_override="openai",
+                voice_override=voice,
+                model_override=model,
+            )
+        except Exception:
+            log.exception("Voice switch to %s failed", voice)
+            return f"Couldn't switch voice to {voice}; see the bridge log."
+        log.info("Pipeline TTS switched to model=%s voice=%s", model, voice)
+        return f"Voice switched to {voice}."
 
     def run(self, pcm_in: bytes, conversation_id: str = "default") -> Optional[bytes]:
         """Blocking — drains the stream into a single bytes buffer.
@@ -1226,7 +1336,7 @@ class Pipeline:
             return
 
         # Voice commands intercept before the LLM gets the text.
-        cmd_reply = _handle_voice_command(text_in, self.llm, conversation_id)
+        cmd_reply = _handle_voice_command(text_in, self, conversation_id)
         if cmd_reply is not None:
             log.info("LLM → %r (voice command)", cmd_reply)
             try:
@@ -1248,30 +1358,36 @@ class Pipeline:
             log.exception("LLM stream failed")
 
 
-def build_pipeline(cfg: dict) -> Pipeline:
-    """Construct the pipeline from a config dict."""
+def _section(cfg: dict, name: str) -> dict:
+    """Return cfg[name] coerced to a dict (handles None from all-
+    commented YAML sections)."""
+    return cfg.get(name) or {}
 
-    def section(name: str) -> dict:
-        return cfg.get(name) or {}
 
-    stt_cfg = section("stt")
+def _build_stt(cfg: dict) -> STT:
+    stt_cfg = _section(cfg, "stt")
     if stt_cfg.get("kind", "whisper") == "mock":
-        stt: STT = MockSTT()
-    else:
-        stt = WhisperCppSTT(
-            binary=stt_cfg.get("binary", "/opt/whisper.cpp/build/bin/whisper-cli"),
-            model_path=stt_cfg.get("model_path", "/opt/whisper.cpp/models/ggml-base.en.bin"),
-            threads=int(stt_cfg.get("threads", 4)),
-        )
+        return MockSTT()
+    return WhisperCppSTT(
+        binary=stt_cfg.get("binary", "/opt/whisper.cpp/build/bin/whisper-cli"),
+        model_path=stt_cfg.get("model_path",
+                               "/opt/whisper.cpp/models/ggml-base.en.bin"),
+        threads=int(stt_cfg.get("threads", 4)),
+    )
 
-    llm_cfg = section("llm")
-    kind = llm_cfg.get("kind", "claude")
+
+def _build_llm(cfg: dict, kind_override: Optional[str] = None) -> LLM:
+    """Build the LLM described by cfg['llm']. Pass kind_override to
+    swap the provider without touching the rest of the config — used
+    by Pipeline.switch_llm."""
+    llm_cfg = _section(cfg, "llm")
+    kind = (kind_override or llm_cfg.get("kind", "claude")).lower()
     if kind == "mock":
-        llm: LLM = MockLLM(system_prompt=llm_cfg.get("system_prompt", ""))
-    elif kind == "grok":
-        llm = GrokLLM(
+        return MockLLM(system_prompt=llm_cfg.get("system_prompt", ""))
+    if kind == "grok":
+        return GrokLLM(
             api_key=llm_cfg.get("api_key") or os.environ.get("XAI_API_KEY", ""),
-            model=llm_cfg.get("model", "grok-4-fast"),
+            model=llm_cfg.get("model", "grok-4.3"),
             system_prompt=llm_cfg.get("system_prompt", GrokLLM.system_prompt),
             max_tokens=int(llm_cfg.get("max_tokens", 200)),
             web_search=bool(llm_cfg.get("web_search", True)),
@@ -1281,38 +1397,58 @@ def build_pipeline(cfg: dict) -> Pipeline:
             max_tool_rounds=int(llm_cfg.get("max_tool_rounds", 4)),
             base_url=llm_cfg.get("base_url", "https://api.x.ai/v1"),
         )
-    else:  # "claude" or anything else falls back to Claude
-        llm = ClaudeLLM(
-            api_key=llm_cfg.get("api_key") or os.environ.get("ANTHROPIC_API_KEY", ""),
-            model=llm_cfg.get("model", "claude-haiku-4-5-20251001"),
-            system_prompt=llm_cfg.get("system_prompt", ClaudeLLM.system_prompt),
-            max_tokens=int(llm_cfg.get("max_tokens", 200)),
-            web_search=bool(llm_cfg.get("web_search", True)),
-            web_search_max_uses=int(llm_cfg.get("web_search_max_uses", 3)),
-            include_unit_id=bool(llm_cfg.get("include_unit_id", False)),
-            radioid_lookup=bool(llm_cfg.get("radioid_lookup", True)),
-            callsign_lookup=bool(llm_cfg.get("callsign_lookup", True)),
-            max_tool_rounds=int(llm_cfg.get("max_tool_rounds", 4)),
-        )
+    # Default: Claude
+    return ClaudeLLM(
+        api_key=llm_cfg.get("api_key") or os.environ.get("ANTHROPIC_API_KEY", ""),
+        model=llm_cfg.get("model", "claude-haiku-4-5-20251001"),
+        system_prompt=llm_cfg.get("system_prompt", ClaudeLLM.system_prompt),
+        max_tokens=int(llm_cfg.get("max_tokens", 200)),
+        web_search=bool(llm_cfg.get("web_search", True)),
+        web_search_max_uses=int(llm_cfg.get("web_search_max_uses", 3)),
+        include_unit_id=bool(llm_cfg.get("include_unit_id", False)),
+        radioid_lookup=bool(llm_cfg.get("radioid_lookup", True)),
+        callsign_lookup=bool(llm_cfg.get("callsign_lookup", True)),
+        max_tool_rounds=int(llm_cfg.get("max_tool_rounds", 4)),
+    )
 
-    tts_cfg = section("tts")
-    tts_kind = tts_cfg.get("kind", "piper")
+
+def _build_tts(cfg: dict,
+               kind_override: Optional[str] = None,
+               model_override: Optional[str] = None,
+               voice_override: Optional[str] = None) -> TTS:
+    """Build the TTS described by cfg['tts']. Overrides let
+    Pipeline.switch_voice swap voice + matching model without
+    discarding the rest of the OpenAI config (key, instructions,
+    preamble, base_url)."""
+    tts_cfg = _section(cfg, "tts")
+    tts_kind = (kind_override or tts_cfg.get("kind", "piper")).lower()
     if tts_kind == "mock":
-        tts: TTS = MockTTS()
-    elif tts_kind == "openai":
-        tts = OpenAITTS(
+        return MockTTS()
+    if tts_kind == "openai":
+        return OpenAITTS(
             api_key=tts_cfg.get("api_key") or os.environ.get("OPENAI_API_KEY", ""),
-            model=tts_cfg.get("model", "gpt-4o-mini-tts"),
-            voice=tts_cfg.get("voice", "ash"),
+            model=model_override or tts_cfg.get("model", "gpt-4o-mini-tts"),
+            voice=voice_override or tts_cfg.get("voice", "ash"),
             instructions=tts_cfg.get("instructions", OpenAITTS.instructions),
             preamble_ms=int(tts_cfg.get("preamble_ms", 150)),
             base_url=tts_cfg.get("base_url", "https://api.openai.com/v1"),
         )
-    else:  # "piper" or anything else falls back to Piper
-        tts = PiperTTS(
-            binary=tts_cfg.get("binary", "piper"),
-            voice_path=tts_cfg.get("voice_path", "/opt/piper/voices/en_US-ryan-medium.onnx"),
-            voice_rate=int(tts_cfg.get("voice_rate", 22050)),
-        )
+    # Default: Piper
+    return PiperTTS(
+        binary=tts_cfg.get("binary", "piper"),
+        voice_path=tts_cfg.get("voice_path",
+                               "/opt/piper/voices/en_US-ryan-medium.onnx"),
+        voice_rate=int(tts_cfg.get("voice_rate", 22050)),
+    )
 
-    return Pipeline(stt=stt, llm=llm, tts=tts)
+
+def build_pipeline(cfg: dict) -> Pipeline:
+    """Construct the pipeline from a config dict. The dict is carried
+    on the Pipeline so runtime voice commands can rebuild the LLM or
+    TTS without losing the surrounding config."""
+    return Pipeline(
+        stt=_build_stt(cfg),
+        llm=_build_llm(cfg),
+        tts=_build_tts(cfg),
+        cfg=cfg,
+    )

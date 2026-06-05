@@ -1177,8 +1177,7 @@ class OpenAITTS:
     # clear, no announcer affect. Override via config to taste.
     instructions: str = (
         "Speak like a regular person talking over a two-way radio — "
-        "or a police dispatcher. Clear and crisp, slightly quick, "
-        "direct. Natural conversational rhythm; no announcer voice, "
+        "or a police dispatcher. Clear and crisp. Natural conversational rhythm; no announcer voice, "
         "no extra warmth, no dramatic pauses. Just deliver the "
         "information cleanly."
     )

@@ -306,6 +306,16 @@ class Bridge:
     # waiting to top the prebuffer up to TARGET. Short — past the
     # first byte the producer is steady-state and bytes arrive fast.
     _PREBUFFER_FILL_S = 3.0
+    # Safety cutoff for a stalled producer mid-call. When the buffer
+    # underruns we transmit silence LDUs to hold the carrier across
+    # short inter-sentence gaps — but if the producer (LLM/TTS) hangs
+    # outright, that would otherwise be unbounded: the bridge would
+    # transmit silence forever. After this many *consecutive* silence
+    # LDUs with no real audio, we give up and end the call. 9 sec is
+    # well past any legitimate inter-sentence gap (even a slow cloud
+    # TTS render) but bounds a true hang. The counter resets whenever a
+    # real-audio LDU goes out.
+    _MAX_CONSECUTIVE_SILENCE_LDUS = 50  # 50 * 180 ms = 9.0 s
 
     def _transmit_pcm_stream(self, chunks_iter) -> None:
         """
@@ -428,7 +438,8 @@ class Bridge:
             packets_sent = 0
             toggle_ldu1 = True
             total_frames = 0
-            silence_ldus = 0   # diagnostic — mid-stream underrun count
+            silence_ldus = 0          # diagnostic — total mid-stream underruns
+            consecutive_silence = 0   # safety cutoff for a stalled producer
 
             # ─── Steady-state TX loop. ─────────────────────────────────
             while True:
@@ -451,6 +462,7 @@ class Bridge:
                     # Full LDU of real audio.
                     pcm_ldu = bytes(buf[:self._LDU_PCM_BYTES])
                     del buf[:self._LDU_PCM_BYTES]
+                    consecutive_silence = 0
                 elif producer_done:
                     # Final partial LDU (silence-padded), or genuinely
                     # nothing left — end the call.
@@ -458,12 +470,25 @@ class Bridge:
                         break
                     pcm_ldu = bytes(buf) + b"\x00" * (self._LDU_PCM_BYTES - len(buf))
                     buf.clear()
+                    consecutive_silence = 0
                 else:
                     # Transient underrun mid-stream (e.g. waiting for the
                     # LLM to produce the next sentence and TTS to render
                     # it). Send a full silence LDU to keep the call up;
                     # KEEP buf so the partial audio joins the next real
                     # LDU instead of being padded prematurely.
+                    consecutive_silence += 1
+                    if consecutive_silence > self._MAX_CONSECUTIVE_SILENCE_LDUS:
+                        # Producer is hung, not just slow. Stop transmitting
+                        # silence and end the call rather than holding the
+                        # carrier with dead air indefinitely.
+                        log.warning(
+                            "TX: producer stalled (%d consecutive silence "
+                            "LDUs, ~%.1fs); ending call",
+                            consecutive_silence,
+                            consecutive_silence * 0.180,
+                        )
+                        break
                     pcm_ldu = b"\x00" * self._LDU_PCM_BYTES
                     silence_ldus += 1
 

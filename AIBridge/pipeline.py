@@ -503,10 +503,18 @@ class ClaudeLLM:
     # Safety cap on the tool-use loop. Each iteration is one extra API
     # round-trip plus one tool execution.
     max_tool_rounds: int = 4
+    # Hard ceiling on a single API request. Without this the SDK
+    # defaults to ~600 s, so a slow/hung request stalls the voice
+    # pipeline (and the bridge transmits silence) for minutes.
+    request_timeout_s: float = 60.0
 
     def __post_init__(self) -> None:
         from anthropic import Anthropic
-        self._client = Anthropic(api_key=self.api_key)
+        self._client = Anthropic(
+            api_key=self.api_key,
+            timeout=self.request_timeout_s,
+            max_retries=1,
+        )
         self._histories: dict[str, list[dict]] = {}
         self._last_seen: dict[str, float] = {}
         # Materialise the tools list once. Empty list means we omit the
@@ -816,10 +824,19 @@ class GrokLLM:
     callsign_lookup: bool = True
     max_tool_rounds: int = 4
     base_url: str = "https://api.x.ai/v1"
+    # Hard ceiling on a single API request. Without this the SDK
+    # defaults to ~600 s, so a slow/hung request stalls the voice
+    # pipeline (and the bridge transmits silence) for minutes.
+    request_timeout_s: float = 60.0
 
     def __post_init__(self) -> None:
         from openai import OpenAI
-        self._client = OpenAI(api_key=self.api_key, base_url=self.base_url)
+        self._client = OpenAI(
+            api_key=self.api_key,
+            base_url=self.base_url,
+            timeout=self.request_timeout_s,
+            max_retries=1,
+        )
         self._histories: dict[str, list[dict]] = {}
         self._last_seen: dict[str, float] = {}
         # Responses-API tool list. Note: function tools are flat here
@@ -1195,9 +1212,19 @@ class OpenAITTS:
     # Bytes per sox.stdout.read() call. Same sizing rationale as PiperTTS.
     _CHUNK_BYTES: int = 8192
 
+    # Hard ceiling on a single TTS HTTP request. Without this the openai
+    # SDK defaults to ~600 s, so a slow/hung request stalls the whole
+    # voice pipeline (and the bridge transmits silence) for minutes.
+    request_timeout_s: float = 30.0
+
     def __post_init__(self) -> None:
         from openai import OpenAI
-        self._client = OpenAI(api_key=self.api_key, base_url=self.base_url)
+        self._client = OpenAI(
+            api_key=self.api_key,
+            base_url=self.base_url,
+            timeout=self.request_timeout_s,
+            max_retries=1,
+        )
 
     def synthesize(self, text: str) -> bytes:
         """Blocking — drains the stream into a single bytes buffer."""
@@ -1221,20 +1248,22 @@ class OpenAITTS:
 
         feeder_error: list[Optional[BaseException]] = [None]
 
+        # Preamble silence — pads the start of every utterance so the
+        # modem PTT lag / radio carrier-acquisition window eats silence
+        # instead of the first phoneme. CRITICAL: we write it only once
+        # the FIRST real audio chunk arrives, not upfront. If the TTS
+        # request fails or returns nothing, writing the preamble anyway
+        # would emit a burst of pure silence on-air (sox sees only the
+        # silence, produces silence, the bridge transmits it). Deferring
+        # it means a failed request produces zero output → the bridge
+        # logs "nothing to send" and stays off-air, instead of keying up
+        # to transmit silence.
+        preamble = (b"\x00" * (self._SOURCE_RATE * 2 * self.preamble_ms // 1000)
+                    if self.preamble_ms > 0 else b"")
+
         def feed_sox() -> None:
             """Stream OpenAI's PCM bytes into sox.stdin."""
             assert sox.stdin is not None
-            # Preamble silence — pads the start of every utterance so the
-            # modem PTT lag / radio carrier-acquisition window eats
-            # silence instead of the first phoneme of the actual word.
-            if self.preamble_ms > 0:
-                preamble_bytes = (self._SOURCE_RATE * 2
-                                  * self.preamble_ms // 1000)
-                try:
-                    sox.stdin.write(b"\x00" * preamble_bytes)
-                except (BrokenPipeError, ValueError):
-                    return
-
             create_kwargs: dict[str, Any] = dict(
                 model=self.model,
                 voice=self.voice,
@@ -1245,6 +1274,8 @@ class OpenAITTS:
                 # Only meaningful on gpt-4o-mini-tts; older tts-1 / hd
                 # silently ignore the field.
                 create_kwargs["instructions"] = self.instructions
+            wrote_preamble = False
+            got_audio = False
             try:
                 with self._client.audio.speech.with_streaming_response.create(
                     **create_kwargs
@@ -1252,12 +1283,22 @@ class OpenAITTS:
                     for chunk in response.iter_bytes():
                         if not chunk:
                             continue
+                        got_audio = True
                         try:
+                            if not wrote_preamble:
+                                # First real audio — emit the silence pad
+                                # ahead of it, then the chunk.
+                                if preamble:
+                                    sox.stdin.write(preamble)
+                                wrote_preamble = True
                             sox.stdin.write(chunk)
                         except (BrokenPipeError, ValueError):
                             # sox went away (consumer abandoned us, or
                             # sox crashed). Stop pumping bytes.
                             return
+                if not got_audio:
+                    log.warning("OpenAI TTS returned no audio for %r",
+                                text[:60])
             except Exception as e:  # noqa: BLE001
                 feeder_error[0] = e
             finally:

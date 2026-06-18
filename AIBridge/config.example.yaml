@@ -159,3 +159,26 @@ tts:
   # preamble_ms: 150
   # Override the API base URL for proxies / Azure / etc.
   # base_url: https://api.openai.com/v1
+
+audio:
+  # "play <query>" voice command: searches with yt-dlp, streams the
+  # result through ffmpeg, and transmits it over the link. Disabled by
+  # default. Requires yt-dlp (pip) and ffmpeg (apt) — both installed by
+  # install.sh.
+  #
+  # NOTE: the IMBE vocoder is built for speech, so music comes out
+  # warbly — vocals are roughly intelligible, full-band music turns to
+  # mush. And whether transmitting a given clip is permitted depends
+  # entirely on your license / frequency and on copyright; that's the
+  # operator's call.
+  enabled: false
+  # Hard cap on playback length in seconds (default 4 minutes). Playback
+  # is also interrupted immediately if anyone keys up (the bridge yields
+  # the channel), regardless of this cap.
+  max_seconds: 240
+  # Output gain in dB. Negative gives headroom so loud passages don't
+  # clip going into the IMBE encoder.
+  gain_db: -6.0
+  # Binaries, if not on PATH.
+  # ytdlp_binary: yt-dlp
+  # ffmpeg_binary: ffmpeg

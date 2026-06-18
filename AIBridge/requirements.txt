@@ -1,3 +1,5 @@
 anthropic>=0.40.0
 openai>=1.66.0
 PyYAML>=6.0
+# Optional: only needed when audio.enabled is true ("play <query>").
+yt-dlp>=2024.1.0

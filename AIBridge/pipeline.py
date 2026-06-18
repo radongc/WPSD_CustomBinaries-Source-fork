@@ -148,6 +148,23 @@ _BARE_SWITCH_RE = re.compile(
     r"\bswitch\s+to\s+([a-z0-9_-]+)\b",
     re.IGNORECASE,
 )
+# "play <query>" — anchored at the start of the utterance so it doesn't
+# hijack normal speech that merely contains the word "play". Captures
+# everything after the lead-in as the search query.
+_PLAY_RE = re.compile(
+    r"^(?:hey\s+)?play\s+(?:me\s+|us\s+|the\s+song\s+|song\s+|some\s+)?(.+)$",
+    re.IGNORECASE,
+)
+
+
+def _parse_play_command(text: str) -> Optional[str]:
+    """If `text` is a 'play <query>' command, return the search query;
+    otherwise None."""
+    m = _PLAY_RE.match(text.strip())
+    if not m:
+        return None
+    query = m.group(1).strip().rstrip(".!?").strip()
+    return query or None
 
 
 def _handle_voice_command(text: str, pipeline, conversation_id: str) -> Optional[str]:
@@ -1350,6 +1367,107 @@ class OpenAITTS:
                     pass
 
 
+# ─── audio playback (yt-dlp search → ffmpeg transcode → PCM) ────────────────
+
+@dataclass
+class AudioPlayer:
+    """
+    "play <query>" support: searches with yt-dlp, then streams the
+    resolved audio URL through ffmpeg into 8 kHz / 16-bit / mono PCM —
+    the same format the TX path consumes from TTS. So the bridge plays
+    audio over P25 with no special handling; it's just another PCM
+    source feeding _transmit_pcm_stream.
+
+    NOTE on audio quality: the downstream IMBE vocoder models the human
+    vocal tract and only passes ~300-3400 Hz. Music comes out warbly
+    and artifact-heavy — vocals are roughly intelligible, instrumentals
+    turn to mush. This is a hard limit of the codec, not something this
+    class can improve.
+
+    Interruption: the bridge's existing tx_abort handling stops playback
+    when someone keys up — closing the consumer generator raises
+    GeneratorExit here, which kills ffmpeg in the finally block, exactly
+    like the TTS classes.
+    """
+    ytdlp_binary: str = "yt-dlp"
+    ffmpeg_binary: str = "ffmpeg"
+    max_seconds: int = 240            # hard cap on playback length (4 min)
+    resolve_timeout_s: float = 25.0   # yt-dlp search + URL resolve
+    gain_db: float = -6.0             # headroom to avoid IMBE clipping
+    _CHUNK_BYTES: int = 8192
+
+    def resolve(self, query: str) -> Optional[tuple[str, str]]:
+        """Search YouTube for `query` and return (stream_url, title), or
+        None if nothing was found / yt-dlp failed. Only resolves the
+        direct media URL — no download."""
+        try:
+            result = subprocess.run(
+                [self.ytdlp_binary, "--no-playlist", "--quiet",
+                 "--no-warnings", "-f", "bestaudio/best",
+                 "--print", "%(title)s", "--print", "%(urls)s",
+                 f"ytsearch1:{query}"],
+                capture_output=True, text=True, check=False,
+                timeout=self.resolve_timeout_s,
+            )
+        except (subprocess.TimeoutExpired, OSError) as e:
+            log.warning("yt-dlp resolve failed for %r: %s", query, e)
+            return None
+        if result.returncode != 0:
+            log.warning("yt-dlp rc=%d for %r: %s",
+                        result.returncode, query, result.stderr.strip()[:200])
+            return None
+        lines = [ln for ln in result.stdout.splitlines() if ln.strip()]
+        if len(lines) < 2:
+            log.warning("yt-dlp gave no usable result for %r", query)
+            return None
+        title = lines[0].strip()
+        url = lines[-1].strip()  # last line is the resolved media URL
+        return url, title
+
+    def stream_pcm(self, url: str) -> Iterator[bytes]:
+        """Transcode the media at `url` to 8 kHz / 16-bit / mono PCM via
+        ffmpeg, yielding chunks. Capped at max_seconds. ffmpeg is killed
+        if the consumer abandons the generator (e.g. TX aborted)."""
+        t0 = time.monotonic()
+        ff = subprocess.Popen(
+            [self.ffmpeg_binary, "-nostdin", "-loglevel", "error",
+             "-i", url,
+             "-t", str(self.max_seconds),
+             "-vn", "-ac", "1", "-ar", str(PCM_SAMPLE_RATE),
+             "-af", f"volume={self.gain_db}dB",
+             "-f", "s16le", "-"],
+            stdin=subprocess.DEVNULL, stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+        )
+        total_bytes = 0
+        try:
+            assert ff.stdout is not None
+            while True:
+                chunk = ff.stdout.read(self._CHUNK_BYTES)
+                if not chunk:
+                    break
+                total_bytes += len(chunk)
+                yield chunk
+
+            try:
+                ff.wait(timeout=10)
+            except subprocess.TimeoutExpired:
+                log.warning("ffmpeg didn't exit cleanly after playback")
+            if ff.returncode not in (0, None) and ff.stderr is not None:
+                err = ff.stderr.read().decode("utf-8", errors="replace")[:200]
+                log.warning("ffmpeg rc=%d: %s", ff.returncode, err)
+            elapsed = time.monotonic() - t0
+            log.info("AudioPlayer stream: %.2fs wall, %d bytes PCM (%.1fs audio)",
+                     elapsed, total_bytes, total_bytes / (PCM_SAMPLE_RATE * 2))
+        finally:
+            if ff.poll() is None:
+                ff.kill()
+                try:
+                    ff.communicate(timeout=5)
+                except (subprocess.TimeoutExpired, ValueError):
+                    pass
+
+
 # ─── pipeline orchestrator ─────────────────────────────────────────────────
 
 @dataclass
@@ -1363,6 +1481,8 @@ class Pipeline:
     # kind/voice. Optional so existing callers that don't pass cfg
     # still work — they just lose the switch capability.
     cfg: Optional[dict] = None
+    # Optional "play <query>" audio playback. None disables the feature.
+    player: Optional[AudioPlayer] = None
 
     def switch_llm(self, kind: str) -> str:
         """Voice-command handler: swap the active LLM to the named
@@ -1433,6 +1553,14 @@ class Pipeline:
         if not text_in.strip():
             return
 
+        # "play <query>" audio playback intercepts before everything
+        # else (so "play ..." never reaches the LLM as a question).
+        if self.player is not None:
+            query = _parse_play_command(text_in)
+            if query is not None:
+                yield from self._play(query)
+                return
+
         # Voice commands intercept before the LLM gets the text.
         cmd_reply = _handle_voice_command(text_in, self, conversation_id)
         if cmd_reply is not None:
@@ -1454,6 +1582,43 @@ class Pipeline:
                     continue
         except Exception:
             log.exception("LLM stream failed")
+
+    def _play(self, query: str) -> Iterator[bytes]:
+        """Resolve `query` via the AudioPlayer, speak a short
+        confirmation, then stream the audio as PCM. Falls back to a
+        spoken error if nothing was found."""
+        assert self.player is not None
+        log.info("Play command: %r", query)
+        resolved = None
+        try:
+            resolved = self.player.resolve(query)
+        except Exception:
+            log.exception("AudioPlayer.resolve crashed")
+
+        if resolved is None:
+            try:
+                yield from self.tts.synthesize_stream(
+                    f"Sorry, I couldn't find anything for {query}."
+                )
+            except Exception:
+                log.exception("TTS failed for play-error message")
+            return
+
+        url, title = resolved
+        log.info("Play resolved: %r → %r", query, title)
+        # Brief spoken confirmation. Strip bracketed junk from the
+        # YouTube title and cap length so we don't read a wall of tags.
+        clean = re.sub(r"[\[(].*?[\])]", "", title).strip()
+        clean = re.sub(r"\s+", " ", clean)[:80].strip() or title[:80]
+        try:
+            yield from self.tts.synthesize_stream(f"Now playing: {clean}.")
+        except Exception:
+            log.exception("TTS failed for play confirmation")
+        # Then the audio itself.
+        try:
+            yield from self.player.stream_pcm(url)
+        except Exception:
+            log.exception("Audio playback failed")
 
 
 def _section(cfg: dict, name: str) -> dict:
@@ -1540,6 +1705,20 @@ def _build_tts(cfg: dict,
     )
 
 
+def _build_player(cfg: dict) -> Optional[AudioPlayer]:
+    """Build the AudioPlayer if cfg['audio'].enabled is true, else None
+    (which disables the 'play <query>' command entirely)."""
+    audio_cfg = _section(cfg, "audio")
+    if not audio_cfg.get("enabled", False):
+        return None
+    return AudioPlayer(
+        ytdlp_binary=audio_cfg.get("ytdlp_binary", "yt-dlp"),
+        ffmpeg_binary=audio_cfg.get("ffmpeg_binary", "ffmpeg"),
+        max_seconds=int(audio_cfg.get("max_seconds", 240)),
+        gain_db=float(audio_cfg.get("gain_db", -6.0)),
+    )
+
+
 def build_pipeline(cfg: dict) -> Pipeline:
     """Construct the pipeline from a config dict. The dict is carried
     on the Pipeline so runtime voice commands can rebuild the LLM or
@@ -1549,4 +1728,5 @@ def build_pipeline(cfg: dict) -> Pipeline:
         llm=_build_llm(cfg),
         tts=_build_tts(cfg),
         cfg=cfg,
+        player=_build_player(cfg),
     )

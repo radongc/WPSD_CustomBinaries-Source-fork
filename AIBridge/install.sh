@@ -23,7 +23,9 @@ echo "[1/7] Installing apt packages"
 apt-get update -qq
 apt-get install -y --no-install-recommends \
     python3 python3-pip python3-yaml \
-    sox build-essential cmake git
+    sox ffmpeg build-essential cmake git
+# ffmpeg is only required for the optional "play <query>" audio feature
+# (audio.enabled in config.yaml); harmless to install regardless.
 
 # ─── python packages ───────────────────────────────────────────────────────
 echo "[2/7] Installing Python packages"
